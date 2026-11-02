@@ -70,13 +70,13 @@ fn run(args: &[String]) -> Result<(), Failure> {
         return forme::validate::validate(&list, &blobs).map_err(|r| Failure::Refused(r.message));
     }
     let bytes = if command.partial {
-        let (bytes, left_out) = forme::write_partial(&list, &blobs).map_err(|r| Failure::Refused(r.message))?;
+        let (written, left_out) = forme::write_partial(&list, &blobs).map_err(|r| Failure::Refused(r.message))?;
         for (kind, count) in left_out {
             eprintln!("forme: left out {count} {kind} item{}", if count == 1 { "" } else { "s" });
         }
-        bytes
+        written.bytes
     } else {
-        forme::write(&list, &blobs).map_err(|r| Failure::Refused(r.message))?
+        forme::write(&list, &blobs).map_err(|r| Failure::Refused(r.message))?.bytes
     };
     let out = command.out.expect("checked by parse_args");
     std::fs::write(&out, bytes).map_err(|e| Failure::Refused(format!("forme: cannot write {}: {e}", out.display())))

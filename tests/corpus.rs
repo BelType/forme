@@ -141,12 +141,12 @@ fn the_validator_refuses_the_nineteen_broken_lists_with_the_oracles_sentences() 
 fn the_same_list_writes_the_same_bytes_twice_and_whatever_its_keys_order() {
     for (name, _) in corpus() {
         let (list, blobs) = list_of(&name);
-        let (once, _) = write_partial(&list, &blobs).unwrap_or_else(|r| panic!("{name}: {r}"));
-        assert_eq!(write_partial(&list, &blobs).unwrap().0, once, "{name}: twice");
+        let once = write_partial(&list, &blobs).unwrap_or_else(|r| panic!("{name}: {r}")).0.bytes;
+        assert_eq!(write_partial(&list, &blobs).unwrap().0.bytes, once, "{name}: twice");
         let value: Value = serde_json::from_str(&text_of(&name)).unwrap();
         for descending in [false, true] {
             let other = list::parse(&reordered(&value, descending)).unwrap();
-            assert_eq!(write_partial(&other, &blobs).unwrap().0, once, "{name}: keys {}", if descending { "descending" } else { "ascending" });
+            assert_eq!(write_partial(&other, &blobs).unwrap().0.bytes, once, "{name}: keys {}", if descending { "descending" } else { "ascending" });
         }
     }
 }
@@ -160,7 +160,7 @@ fn the_writer_refuses_by_name_what_this_stage_does_not_write_a_blob_that_is_not_
     assert!(write_partial(&list, &blobs).unwrap_err().message.starts_with(&format!("forme: the blob {font} holds bytes whose SHA-256 is ")));
     blobs.get_mut(&font).unwrap()[0] ^= 1;
     list.info.created = "2026-11-02T10:20:30.456Z".into();
-    let text = String::from_utf8_lossy(&write_partial(&list, &blobs).unwrap().0).into_owned();
+    let text = String::from_utf8_lossy(&write_partial(&list, &blobs).unwrap().0.bytes).into_owned();
     assert!(text.contains("/CreationDate (D:20261102102030Z)") && text.contains("/ModDate (D:20261102102030Z)"), "both dates, at whole seconds");
     list.info.created = "2026-11-02 10:20".into();
     assert_eq!(write_partial(&list, &blobs).unwrap_err().message, "caster: the display list's info.created is \"2026-11-02 10:20\", which is not an ISO 8601 instant in UTC (YYYY-MM-DDTHH:mm:ssZ)");

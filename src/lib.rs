@@ -1,8 +1,9 @@
 //! forme: a PDF 2.0 writer that reads Caster's display list and nothing else, held to the files Caster's TypeScript writer prints from the same lists (*the same list prints the same bytes*, Caster's DESIGN.md S102).
 //!
-//! The whole API is [`write`]: a list and its blobs in, the file out, or a [`Refusal`] in a sentence. The list's schema is [`list`], its refusals before a byte are [`validate`], and the content-stream writer is [`content`]. Stage 1 of the round writes the document's scaffolding (the header, the catalog with `/Version /2.0`, `/Lang` and `/DisplayDocTitle`, every page with its boxes and an empty content stream, the Info dictionary, the XMP packet and the trailer `/ID`) and refuses by name every item kind it does not write yet; [`write_partial`] leaves those items out instead and says which, for the stage gates only, and goes when nothing is left out.
+//! The whole API is [`write`]: a list and its blobs in, the file out, or a [`Refusal`] in a sentence. The list's schema is [`list`], its refusals before a byte are [`validate`], the content-stream writer is [`content`] and the fonts are [`fonts`]. The writer writes the document's scaffolding (the header, the catalog with `/Version /2.0`, `/Lang` and `/DisplayDocTitle`, every page with its boxes, every font instance as `F0`, `F1`, … in its resources and an empty content stream, the Info dictionary, the XMP packet and the trailer `/ID`) and every font instance's objects, returns the `faces` record beside the bytes, and refuses by name every item kind it does not write yet; [`write_partial`] leaves those items out instead and says which, for the stage gates only, and goes when nothing is left out.
 
 pub mod content;
+pub mod fonts;
 pub mod list;
 pub mod validate;
 
@@ -45,6 +46,21 @@ impl fmt::Display for Refusal {
 
 impl std::error::Error for Refusal {}
 
+/// The file a list makes, and the records of what the writer chose, as Caster's `WriterRecords` (`src/displayList/contract.ts`) names them: this stage returns the `faces`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Written {
+    pub bytes: Vec<u8>,
+    pub records: Records,
+}
+
+/// The writer's records, serialised as Caster's `WriterRecords` JSON; the members this stage does not make yet are left out.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Records {
+    /// What each font instance became, one per instance in the order of `resources.fonts`.
+    pub faces: Vec<fonts::FaceRecord>,
+}
+
 /// The item kinds a partial write left out, each with how many, in the kinds' order of first appearance.
 pub type LeftOut = Vec<(&'static str, usize)>;
 
@@ -52,19 +68,19 @@ pub type LeftOut = Vec<(&'static str, usize)>;
 ///
 /// # Errors
 /// Every refusal of [`validate::validate`], first; then a blob whose bytes are not its name, an `info.created` that is not an instant in UTC, and an item of a kind this stage does not write, by name.
-pub fn write(list: &DisplayList, blobs: &Blobs) -> Result<Vec<u8>, Refusal> {
-    write_with(list, blobs, false).map(|(bytes, _)| bytes)
+pub fn write(list: &DisplayList, blobs: &Blobs) -> Result<Written, Refusal> {
+    write_with(list, blobs, false).map(|(written, _)| written)
 }
 
 /// The file a list makes with the items this stage does not write left out, and how many of each kind were, in the kinds' order of first appearance. For the stage gates only: it goes with the last item kind built.
 ///
 /// # Errors
 /// As [`write`], but for the item kinds left out.
-pub fn write_partial(list: &DisplayList, blobs: &Blobs) -> Result<(Vec<u8>, LeftOut), Refusal> {
+pub fn write_partial(list: &DisplayList, blobs: &Blobs) -> Result<(Written, LeftOut), Refusal> {
     write_with(list, blobs, true)
 }
 
-fn write_with(list: &DisplayList, blobs: &Blobs, partial: bool) -> Result<(Vec<u8>, LeftOut), Refusal> {
+fn write_with(list: &DisplayList, blobs: &Blobs, partial: bool) -> Result<(Written, LeftOut), Refusal> {
     validate::validate(list, blobs)?;
     for (name, bytes) in blobs {
         let hash = hex(&Sha256::digest(bytes));
@@ -95,6 +111,8 @@ fn write_with(list: &DisplayList, blobs: &Blobs, partial: bool) -> Result<(Vec<u
     let page_ids: Vec<(Ref, Ref)> = list.pages.iter().map(|_| (next.bump(), next.bump())).collect();
     let info_id = next.bump();
     let xmp_id = next.bump();
+    let (font_ids, faces) = fonts::write_fonts(&mut pdf, &mut next, list, blobs)?;
+    let font_names: Vec<String> = (0..font_ids.len()).map(|i| format!("F{i}")).collect();
 
     let mut catalog = pdf.catalog(catalog_id);
     catalog.pages(pages_id);
@@ -114,7 +132,14 @@ fn write_with(list: &DisplayList, blobs: &Blobs, partial: bool) -> Result<(Vec<u
         if let Some(bleed) = &page.boxes.bleed {
             writer.bleed_box(rect(bleed));
         }
-        writer.resources();
+        // Every page names every instance, `F0`, `F1`, … in the order of `resources.fonts`, as the oracle's `setupPages` does.
+        let mut resources = writer.resources();
+        let mut fonts = resources.fonts();
+        for (name, &id) in font_names.iter().zip(&font_ids) {
+            fonts.pair(Name(name.as_bytes()), id);
+        }
+        fonts.finish();
+        resources.finish();
         writer.contents(content_id);
         writer.finish();
         pdf.stream(content_id, &[]);
@@ -134,7 +159,7 @@ fn write_with(list: &DisplayList, blobs: &Blobs, partial: bool) -> Result<(Vec<u
     // ISO 32000-2 §7.5.5 requires an `/ID` of every PDF 2.0 file, and the oracle writes none: both entries are the first 16 bytes of a SHA-256 over the file as written up to the cross-reference table, so the identifier is a function of the list.
     let id = Sha256::digest(pdf.as_bytes())[..16].to_vec();
     pdf.set_file_id((id.clone(), id));
-    Ok((pdf.finish(), left_out))
+    Ok((Written { bytes: pdf.finish(), records: Records { faces } }, left_out))
 }
 
 /// A box of the list as pdf-writer's rectangle, whose reals are `f32`.
@@ -250,6 +275,6 @@ mod wasm_probe {
     pub unsafe extern "C" fn forme_write(ptr: *const u8, len: usize) -> usize {
         let json = unsafe { std::slice::from_raw_parts(ptr, len) };
         let Ok(json) = std::str::from_utf8(json) else { return 0 };
-        crate::list::parse(json).and_then(|list| crate::write(&list, &Default::default())).map_or(0, |bytes| bytes.len())
+        crate::list::parse(json).and_then(|list| crate::write(&list, &Default::default())).map_or(0, |written| written.bytes.len())
     }
 }
