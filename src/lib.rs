@@ -255,7 +255,7 @@ pub fn read_blobs(list: &DisplayList, dir: &std::path::Path) -> std::io::Result<
     Ok(blobs)
 }
 
-/// The tab's face is stage 9's (wasm-bindgen); until then one raw export keeps [`write`] reachable in the module, so its size can be measured: a list's JSON in linear memory, the length of the file it makes out, or 0 for a refusal.
+/// The tab's face is stage 9's (wasm-bindgen); until then one raw export keeps [`write`] reachable in the module, so its size can be measured: a list's JSON in linear memory, the length of the file it makes out, or 0 for a refusal. Its empty blobs pass through `black_box`, so the optimiser cannot read the pool as empty and drop every font program, as it does under LTO.
 #[cfg(target_arch = "wasm32")]
 mod wasm_probe {
     /// Room for `len` bytes, leaked to the caller.
@@ -275,6 +275,6 @@ mod wasm_probe {
     pub unsafe extern "C" fn forme_write(ptr: *const u8, len: usize) -> usize {
         let json = unsafe { std::slice::from_raw_parts(ptr, len) };
         let Ok(json) = std::str::from_utf8(json) else { return 0 };
-        crate::list::parse(json).and_then(|list| crate::write(&list, &Default::default())).map_or(0, |written| written.bytes.len())
+        crate::list::parse(json).and_then(|list| crate::write(&list, std::hint::black_box(&Default::default()))).map_or(0, |written| written.bytes.len())
     }
 }
