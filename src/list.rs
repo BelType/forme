@@ -675,6 +675,26 @@ impl<'de> Deserialize<'de> for Item {
     }
 }
 
+/// An untagged enum read as serde's derive reads one, each variant tried in order with serde's sentence when none matches, but from the raw JSON, so no variant is read through serde's buffered `Content` and the readers link once.
+macro_rules! untagged {
+    ($name:ident { $($variant:ident($ty:ty)),+ }) => {
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                let raw = <&RawValue>::deserialize(d)?;
+                $(if let Ok(v) = serde_json::from_str::<$ty>(raw.get()) {
+                    return Ok($name::$variant(v));
+                })+
+                Err(de::Error::custom(concat!("data did not match any variant of untagged enum ", stringify!($name))))
+            }
+        }
+    };
+}
+
+untagged!(Ink { Cmyk(CmykInk), Spot(SpotInk) });
+untagged!(Paint { Rgb(RgbPaint), Cmyk(CmykInk), Gradient(GradientPaint) });
+untagged!(StructChild { Element(Num), Content(ContentChild), Link(LinkChild) });
+untagged!(TagStart { Content(ContentStart), Artifact(ArtifactStart) });
+
 /// One vector item: what a collector measured, painted under a transform, clips, alpha and a mask.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(untagged)]
@@ -856,7 +876,7 @@ pub struct Fill {
 }
 
 /// A declared ink: process CMYK, or a spot colourant with its alternate and tint. The names `All` and `None` are the two colourants PDF predefines.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum Ink {
     Cmyk(CmykInk),
@@ -963,7 +983,7 @@ pub enum MaskType {
 }
 
 /// What a vector fill or stroke paints with.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum Paint {
     Rgb(RgbPaint),
@@ -1310,7 +1330,7 @@ impl<'de> Deserialize<'de> for Attribute {
 }
 
 /// One entry of an element's `/K`: another element by its index in `elements`; a marked-content sequence by the page and the index in that page's `items` of the `tag` item that opens it; or the annotation of the `link` item whose `order` this is, as an `/OBJR`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum StructChild {
     Element(Num),
@@ -1351,7 +1371,7 @@ pub struct TagEndItem {
 }
 
 /// What a marked-content sequence is: an element's content, or an artifact.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum TagStart {
     Content(ContentStart),
@@ -1407,8 +1427,8 @@ pub enum ArtifactKind {
 }
 
 /// One segment of a path, in PDF points. `c` carries two control points.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "op", deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "op")]
 pub enum PathSegment {
     #[serde(rename = "m")]
     Move { to: [Num; 2] },
@@ -1418,6 +1438,48 @@ pub enum PathSegment {
     Curve { c1: [Num; 2], c2: [Num; 2], to: [Num; 2] },
     #[serde(rename = "h")]
     Close,
+}
+
+/// A path segment read as serde's derive reads an internally tagged enum that refuses unknown fields, with its sentences, but field by field, so serde's buffered `Content` does not link.
+impl<'de> Deserialize<'de> for PathSegment {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Raw {
+            op: Option<String>,
+            to: Option<[Num; 2]>,
+            c1: Option<[Num; 2]>,
+            c2: Option<[Num; 2]>,
+        }
+        const OPS: &[&str] = &["m", "l", "c", "h"];
+        let raw = Raw::deserialize(d)?;
+        let op = raw.op.ok_or_else(|| de::Error::missing_field("op"))?;
+        let only = |allowed: &'static [&'static str]| -> Result<(), D::Error> {
+            for (name, present) in [("to", raw.to.is_some()), ("c1", raw.c1.is_some()), ("c2", raw.c2.is_some())] {
+                if present && !allowed.contains(&name) {
+                    return Err(de::Error::unknown_field(name, allowed));
+                }
+            }
+            Ok(())
+        };
+        let need = |field: Option<[Num; 2]>, name: &'static str| field.ok_or_else(|| de::Error::missing_field(name));
+        Ok(match op.as_str() {
+            "m" => {
+                only(&["to"])?;
+                PathSegment::Move { to: need(raw.to, "to")? }
+            }
+            "l" => {
+                only(&["to"])?;
+                PathSegment::Line { to: need(raw.to, "to")? }
+            }
+            "c" => PathSegment::Curve { c1: need(raw.c1, "c1")?, c2: need(raw.c2, "c2")?, to: need(raw.to, "to")? },
+            "h" => {
+                only(&[])?;
+                PathSegment::Close
+            }
+            other => return Err(de::Error::unknown_variant(other, OPS)),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -1447,5 +1509,20 @@ mod tests {
     fn a_number_goes_back_as_json_writes_it() {
         let nums: Vec<Num> = serde_json::from_str("[0, -0, 12, 12.5, 0.1, 1e-7]").unwrap();
         assert_eq!(serde_json::to_string(&nums).unwrap(), "[0,0,12,12.5,0.1,1e-7]");
+    }
+
+    #[test]
+    fn the_hand_readers_read_and_refuse_as_the_derives_did() {
+        let path = r#"[{"op":"m","to":[0,1]},{"op":"l","to":[2,3]},{"op":"c","c1":[1,1],"c2":[2,2],"to":[3,3]},{"op":"h"}]"#;
+        let segments: Path = serde_json::from_str(path).unwrap();
+        assert_eq!(serde_json::to_string(&segments).unwrap(), path);
+        for (bad, says) in [(r#"{"to":[0,0]}"#, "missing field `op`"), (r#"{"op":"z"}"#, "unknown variant `z`"), (r#"{"op":"h","to":[0,0]}"#, "unknown field `to`"), (r#"{"op":"c","to":[0,0]}"#, "missing field `c1`"), (r#"{"op":"m","to":[0,0],"x":1}"#, "unknown field `x`")] {
+            let error = serde_json::from_str::<PathSegment>(bad).unwrap_err().to_string();
+            assert!(error.contains(says), "{bad}: {error}");
+        }
+        assert_eq!(serde_json::from_str::<Paint>(r#"{"cmyk":[0,0,0,1]}"#).unwrap(), Paint::Cmyk(CmykInk { cmyk: [Num(0.0), Num(0.0), Num(0.0), Num(1.0)] }));
+        assert_eq!(serde_json::from_str::<StructChild>("7").unwrap(), StructChild::Element(Num(7.0)));
+        let error = serde_json::from_str::<Ink>(r#"{"rgb":[0,0,0]}"#).unwrap_err().to_string();
+        assert!(error.starts_with("data did not match any variant of untagged enum Ink"), "{error}");
     }
 }
