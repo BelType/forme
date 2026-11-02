@@ -175,3 +175,36 @@ fn a_list_with_a_lone_surrogate_in_a_run_reads_and_writes() {
     assert_eq!(units[0], 0xD800);
     assert!(serde_json::to_string(&list).unwrap().contains("\"text\":\"\\ud800 Note"), "written back as JSON.stringify writes it");
 }
+
+/// The four broken trees of Caster's `the writer refuses a tree that is not one` that the nineteen do not already hold: two parents, an orphan, a cycle, and content claimed by the wrong element.
+#[test]
+fn the_validator_refuses_the_four_other_broken_trees_with_the_oracles_sentences() {
+    let refused = |change: &dyn Fn(&mut DisplayList), message: &str, item: Option<[f64; 2]>| {
+        let (mut list, blobs) = list_of("cast");
+        change(&mut list);
+        assert_eq!(validate(&list, &blobs), Err(Refusal { message: message.to_string(), list_item: item }));
+    };
+    let one = StructChild::Element(list::Num(1.0));
+    let unparent_one = |l: &mut DisplayList| {
+        let p = l.structure.elements.iter().position(|e| e.children.contains(&one)).unwrap();
+        l.structure.elements[p].children.retain(|c| *c != one);
+    };
+    refused(&|l| l.structure.elements[0].children.push(one.clone()), "caster: structure element 0 (Document) lists element 1, which it already lists; an element has one parent", None);
+    refused(&|l| unparent_one(l), "caster: structure element 1 (Document/H1[0]) is no element's child, so the tree does not reach it", None);
+    refused(&|l| {
+        // Element 1 moves under its own last descendant: every element keeps one parent, and the tree has a cycle.
+        unparent_one(l);
+        let mut leaf = 1;
+        while let Some(StructChild::Element(n)) = l.structure.elements[leaf].children.iter().rev().find(|c| matches!(c, StructChild::Element(_))) {
+            leaf = n.index().unwrap();
+        }
+        l.structure.elements[leaf].children.push(one.clone());
+    }, "caster: structure element 1 (Document/H1[0]) is its own ancestor; the tree has a cycle", None);
+    refused(&|l| {
+        let owners: Vec<usize> = l.structure.elements.iter().enumerate().filter(|(_, e)| e.children.iter().any(|c| matches!(c, StructChild::Content(_)))).map(|(i, _)| i).collect();
+        let (a, b) = (owners[0], owners[1]);
+        let at = l.structure.elements[b].children.iter().position(|c| !matches!(c, StructChild::Element(_))).unwrap();
+        let moved = l.structure.elements[b].children.remove(at);
+        l.structure.elements[a].children.push(moved);
+    }, "caster: structure element 1 (Document/H1[0]) lists item 3 of page 1, which opens content for element 2", Some([0.0, 3.0]));
+}
