@@ -15,6 +15,13 @@ pdf-writer = "=0.15.0"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = { version = "=1.0.154", features = ["float_roundtrip", "raw_value"] }
 sha2 = "=0.11.1"
+subsetter = "=0.2.6"
+skrifa = "=0.42.1"
+flate2 = "=1.1.10"
+
+# The readers the gate asks of the file, never linked into the writer: a PDF parser that is not pdf-writer, so a test reads the file as a reader would.
+[dev-dependencies]
+hayro-syntax = { version = "=0.7.2", default-features = false, features = ["std"] }
 
 # The module's size is measured under this profile: `cargo build --lib --profile wasm --target wasm32-unknown-unknown`.
 [profile.wasm]
