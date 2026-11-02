@@ -32,6 +32,7 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
-# skrifa is forme's copy of 0.42.1 under vendor/skrifa, changed so its hinting code does not link (NOTICE says what changed and why).
+# skrifa and write-fonts are forme's copies of 0.42.1 and 0.48.1 under vendor/, changed so code forme never runs does not link (NOTICE says what changed and why).
 [patch.crates-io]
 skrifa = { path = "vendor/skrifa" }
+write-fonts = { path = "vendor/write-fonts" }
