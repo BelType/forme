@@ -63,3 +63,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+
+# forme's copy of skrifa
+
+forme builds against its own copy of skrifa 0.42.1 (MIT OR Apache-2.0, https://github.com/googlefonts/fontations), under `vendor/skrifa`, through `[patch.crates-io]`, so that skrifa's hinting code does not link into the WebAssembly module: forme and subsetter draw every outline unhinted, and the TrueType interpreter, the CFF hinter and the autohinter were about a fifth of the module. The copy is the crate as crates.io ships it, with its licence files, and five lines changed in three files, each of which opens with a line saying so. In `src/outline/mod.rs`, `DrawSettings::unhinted` and `OutlineGlyph::draw` are marked `#[inline(always)]`, so a caller's unhinted settings decide the match at compile time and the hinted arm is dropped; and a constant `HINTING`, false, is added. In `src/outline/glyf/mod.rs` the two places the TrueType interpreter runs, and in `src/outline/cff/mod.rs` the one place the CFF hinter runs, are guarded by `HINTING` as well. An unhinted draw is unchanged; a hinted draw in this copy draws unhinted, and nothing in forme asks for one. A patched copy is the only door: skrifa has no feature that leaves its hinting out, and subsetter calls it with default features.

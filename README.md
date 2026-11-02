@@ -13,3 +13,14 @@ forme is held to the readers, not to the oracle's bytes (*the same list prints t
 ## How to build and test
 
 Run `cargo build` for the library and the binary, then `cargo test` with a Caster checkout as the sibling `../caster`, or name it in `CASTER`; the tests read its committed lists. Run `forme validate <list.json>` to hold one list to the validator, and `forme write <list.json> --blobs <dir> -o <out.pdf>` to write its file. For the stage gates only, `--partial` leaves out the items this stage does not write and lists them on stderr. Build the module with `cargo build --lib --profile wasm --target wasm32-unknown-unknown`, then shrink it with `wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int`. Without the two flags `wasm-opt` refuses the module, because rustc 1.99 emits both features. The module's size is held to the bytes it lets Caster delete, 1 061 704. `NOTICE` carries the notices of the code subsetter adapts, which travel with every binary.
+
+## The crates it links
+
+| Crate | Pin | Why |
+| :--- | :--- | :--- |
+| pdf-writer | 0.15.0 | the PDF objects |
+| serde, serde_json | 1.0.229, 1.0.154 | the list, read with `float_roundtrip` and `raw_value` |
+| sha2 | 0.11.1 | the blobs' names |
+| subsetter | 0.2.6 | the subset and the instancing |
+| skrifa (read-fonts 0.39.2, write-fonts 0.48.1) | 0.42.1, forme's copy under `vendor/skrifa` | the font reads; the copy leaves skrifa's hinting code out, as `NOTICE` says |
+| flate2 (miniz_oxide) | 1.1.10 (0.9.1) | every stream at level 6; flate2 1.1.10 requires miniz_oxide 0.9 |
