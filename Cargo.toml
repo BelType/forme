@@ -1,0 +1,26 @@
+[package]
+name = "forme"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+description = "A PDF 2.0 writer that reads Caster's display list, and nothing else."
+license = "MIT"
+repository = "https://codeberg.org/BelType/forme"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pdf-writer = "=0.15.0"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.154", features = ["float_roundtrip", "raw_value"] }
+sha2 = "=0.11.1"
+
+# The module's size is measured under this profile: `cargo build --lib --profile wasm --target wasm32-unknown-unknown`.
+[profile.wasm]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
