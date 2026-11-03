@@ -160,7 +160,10 @@ fn the_same_list_writes_the_same_bytes_twice_and_whatever_its_keys_order() {
 #[test]
 fn the_writer_refuses_by_name_what_this_stage_does_not_write_a_blob_that_is_not_its_name_and_a_date_that_is_not_an_instant() {
     let (mut list, mut blobs) = list_of("cast");
-    assert_eq!(write(&list, &blobs).unwrap_err().message, "forme: item 1 of page 2 is a image item, which this stage of forme does not write yet");
+    assert_eq!(write(&list, &blobs).unwrap_err().message, "forme: item 31 of page 3 is a shape item, which this stage of forme does not write yet");
+    let (facsimile, facsimile_blobs) = list_of("facsimile");
+    let refused = write(&facsimile, &facsimile_blobs).unwrap_err().message;
+    assert!(refused.starts_with("forme: image 0 (") && refused.ends_with(") is a facsimile, which this stage of forme does not write yet"), "{refused}");
     let font = list.resources.fonts[0].blob.clone();
     blobs.get_mut(&font).unwrap()[0] ^= 1;
     assert!(write_partial(&list, &blobs).unwrap_err().message.starts_with(&format!("forme: the blob {font} holds bytes whose SHA-256 is ")));
@@ -231,7 +234,11 @@ fn the_page_loop_records_every_run_and_content_start_and_refuses_a_colour_story_
             let starts: Vec<usize> = page.items.iter().enumerate().filter(|(_, i)| matches!(i, Item::TagStart(t) if matches!(t.start, TagStart::Content(_)))).map(|(at, _)| at).collect();
             assert_eq!(mcids, &starts, "{name}: the MCIDs are the content starts in item order");
         }
-        let whole = list.pages.iter().flat_map(|p| &p.items).all(|i| matches!(i, Item::Text(_) | Item::TagStart(_) | Item::TagEnd(_)));
+        let facsimile = |source: &list::Num| list.resources.images.get(&(source.0 as u32)).is_some_and(|s| s.kind == list::ImageKind::Facsimile);
+        let whole = list.pages.iter().flat_map(|p| &p.items).all(|i| match i {
+            Item::Image(image) => !facsimile(&image.source),
+            i => matches!(i, Item::Text(_) | Item::TagStart(_) | Item::TagEnd(_) | Item::Link(_)),
+        });
         if list.writing.colour.is_some() {
             assert_eq!(write(&list, &blobs).unwrap_err().message, "forme: the display list has a colour story (writing.colour), which this stage of forme does not write yet");
         } else if whole {
@@ -261,4 +268,44 @@ fn every_page_points_into_the_tree_and_two_elements_with_one_id_are_refused() {
     list.structure.elements[ids[1]].id = list.structure.elements[ids[0]].id.clone();
     let id = list.structure.elements[ids[0]].id.clone().unwrap();
     assert_eq!(write_partial(&list, &blobs).unwrap_err().message, format!("caster: two elements carry the /ID {}", serde_json::to_string(&id).unwrap()));
+}
+
+/// Every image the lists paint, read back by hayro-syntax from the page that names it: a file passed through is the file (a JPEG's bytes, a PNG's `IDAT`), the photo rule's JPEG is the list's, and samples inflate to the list's colour plane, with an `/SMask` that inflates to its alpha exactly where some pixel is not opaque. The XObjects against the oracle's are Caster's `npm run identity -- compare --only text,tags,images`.
+#[test]
+fn every_painted_image_is_the_lists_bytes_in_the_file() {
+    use hayro_syntax::object::{Dict, Stream};
+    let mut seen = 0;
+    for (name, _) in corpus() {
+        let (list, blobs) = list_of(&name);
+        let written = write_partial(&list, &blobs).unwrap_or_else(|r| panic!("{name}: {r}")).0;
+        let pdf = hayro_syntax::Pdf::new(written.bytes).unwrap();
+        let pages = pdf.pages();
+        for used in &written.records.images {
+            let xobject: Stream = pages[used.page].raw().get::<Dict>(b"Resources").and_then(|r| r.get::<Dict>(b"XObject")).and_then(|x| x.get::<Stream>(used.name.as_bytes())).unwrap_or_else(|| panic!("{name}: {} on page {}", used.name, used.page));
+            let source = &list.resources.images[&used.source];
+            let what = format!("{name}: image {} ({})", used.source, used.info.path);
+            match (used.info.path, used.info.filter) {
+                ("passthrough", "DCTDecode") => assert_eq!(&*xobject.raw_data(), blobs[source.blob.as_ref().unwrap()].as_slice(), "{what}"),
+                ("passthrough", _) => assert_eq!(*xobject.raw_data(), forme::images::parse_png(&blobs[source.blob.as_ref().unwrap()]).unwrap().idat, "{what}"),
+                ("decode-jpeg", _) => assert_eq!(&*xobject.raw_data(), blobs[source.jpeg.as_ref().unwrap()].as_slice(), "{what}"),
+                _ => {
+                    let samples = source.samples.as_ref().unwrap();
+                    let bytes = (samples.bits_per_component.0 / 8.0) as usize;
+                    let stride = (if samples.color_space == "DeviceRGB" { 3 } else { 1 } + usize::from(samples.alpha)) * bytes;
+                    let colour_bytes = stride - if samples.alpha { bytes } else { 0 };
+                    let data = &blobs[&samples.blob];
+                    let colour: Vec<u8> = data.chunks_exact(stride).flat_map(|p| p[..colour_bytes].to_vec()).collect();
+                    let alpha: Vec<u8> = if samples.alpha { data.chunks_exact(stride).flat_map(|p| p[colour_bytes..].to_vec()).collect() } else { Vec::new() };
+                    assert_eq!(*xobject.decoded().unwrap(), colour, "{what}: the colour plane");
+                    let mask = xobject.dict().get::<Stream>(b"SMask");
+                    assert_eq!(mask.is_some(), alpha.iter().any(|&a| a != 0xff), "{what}: an /SMask exactly where a pixel is not opaque");
+                    if let Some(mask) = mask {
+                        assert_eq!(*mask.decoded().unwrap(), alpha, "{what}: the alpha plane");
+                    }
+                }
+            }
+            seen += 1;
+        }
+    }
+    assert_eq!(seen, 12, "the images the corpus paints, but the facsimiles");
 }

@@ -1,9 +1,10 @@
 //! forme: a PDF 2.0 writer that reads Caster's display list and nothing else, held to the files Caster's TypeScript writer prints from the same lists (*the same list prints the same bytes*, Caster's DESIGN.md S102).
 //!
-//! The whole API is [`write`]: a list and its blobs in, the file out, or a [`Refusal`] in a sentence. The list's schema is [`list`], its refusals before a byte are [`validate`], the content-stream writer is [`content`], the fonts are [`fonts`], the page's marked content and text are [`text`], and the structure tree and what points into it are [`tree`]. The writer writes the document's scaffolding (the header, the catalog with `/Version /2.0`, `/Lang`, `/DisplayDocTitle`, `/StructTreeRoot`, `/MarkInfo`, `/Outlines` and `/PageLabels`, every page with its boxes, `/Tabs /S`, `/StructParents` and its link annotations, every font instance as `F0`, `F1`, … in its resources and its content stream, the Info dictionary, the XMP packet and the trailer `/ID`), every font instance's objects, each page's marked content and text, and the tree; it returns the `mcids`, `pens`, `kernAdjustments`, `actualTextSpans` and `faces` records beside the bytes, and refuses by name every item kind it does not write yet and a list with a colour story; [`write_partial`] leaves those out instead and says which, for the stage gates only, and goes when nothing is left out.
+//! The whole API is [`write`]: a list and its blobs in, the file out, or a [`Refusal`] in a sentence. The list's schema is [`list`], its refusals before a byte are [`validate`], the content-stream writer is [`content`], the fonts are [`fonts`], the image XObjects are [`images`], the page's marked content, text and images are [`text`], and the structure tree and what points into it are [`tree`]. The writer writes the document's scaffolding (the header, the catalog with `/Version /2.0`, `/Lang`, `/DisplayDocTitle`, `/StructTreeRoot`, `/MarkInfo`, `/Outlines` and `/PageLabels`, every page with its boxes, `/Tabs /S`, `/StructParents` and its link annotations, every font instance as `F0`, `F1`, … in its resources and its content stream, the Info dictionary, the XMP packet and the trailer `/ID`), every font instance's objects, every image XObject the list's images and raster fallbacks make (each page naming those it paints), each page's marked content, text and images, and the tree; it returns the `mcids`, `pens`, `kernAdjustments`, `actualTextSpans`, `faces`, `images` and `xobjects` records beside the bytes, and refuses by name every item kind it does not write yet and a list with a colour story; [`write_partial`] leaves those out instead and says which, for the stage gates only, and goes when nothing is left out.
 
 pub mod content;
 pub mod fonts;
+pub mod images;
 pub mod list;
 pub mod text;
 pub mod tree;
@@ -69,6 +70,10 @@ pub struct Records {
     pub actual_text_spans: usize,
     /// What each font instance became, one per instance in the order of `resources.fonts`.
     pub faces: Vec<fonts::FaceRecord>,
+    /// One entry per image item painted, in painting order.
+    pub images: Vec<images::ImageUse>,
+    /// How many distinct image XObjects the file holds, the raster fallbacks' included, by the dedupe rule.
+    pub xobjects: usize,
 }
 
 /// The item kinds a partial write left out, each with how many, in the kinds' order of first appearance.
@@ -117,8 +122,9 @@ fn write_with(list: &DisplayList, blobs: &Blobs, partial: bool) -> Result<(Writt
     let info_id = next.bump();
     let xmp_id = next.bump();
     let (embedded, faces) = fonts::write_fonts(&mut pdf, &mut next, list, blobs)?;
+    let images = images::write(&mut pdf, &mut next, list, blobs, partial)?;
     let font_names = text::font_names(&embedded);
-    let (contents, counts) = text::pages(list, &embedded, partial)?;
+    let (contents, counts) = text::pages(list, &embedded, &images, partial)?;
     for kind in contents.iter().flat_map(|c| &c.left_out) {
         match left_out.iter_mut().find(|(k, _)| k == kind) {
             Some((_, count)) => *count += 1,
@@ -162,6 +168,13 @@ fn write_with(list: &DisplayList, blobs: &Blobs, partial: bool) -> Result<(Writt
             fonts.pair(Name(name.as_bytes()), *id);
         }
         fonts.finish();
+        if !content.xobjects.is_empty() {
+            let mut xobjects = resources.x_objects();
+            for (name, id) in &content.xobjects {
+                xobjects.pair(Name(name.as_bytes()), *id);
+            }
+            xobjects.finish();
+        }
         resources.finish();
         writer.contents(content_id);
         // `/Tabs /S` on every page, as the oracle's `setupPages` sets it: tab order follows the structure tree. `/StructParents` is the page's key in the ParentTree.
@@ -188,7 +201,7 @@ fn write_with(list: &DisplayList, blobs: &Blobs, partial: bool) -> Result<(Writt
     // ISO 32000-2 §7.5.5 requires an `/ID` of every PDF 2.0 file, and the oracle writes none: both entries are the first 16 bytes of a SHA-256 over the file as written up to the cross-reference table, so the identifier is a function of the list.
     let id = Sha256::digest(pdf.as_bytes())[..16].to_vec();
     pdf.set_file_id((id.clone(), id));
-    Ok((Written { bytes: pdf.finish(), records: Records { mcids: counts.mcids, pens: counts.pens, kern_adjustments: counts.kern_adjustments, actual_text_spans: counts.actual_text_spans, faces } }, left_out))
+    Ok((Written { bytes: pdf.finish(), records: Records { mcids: counts.mcids, pens: counts.pens, kern_adjustments: counts.kern_adjustments, actual_text_spans: counts.actual_text_spans, faces, images: counts.images, xobjects: images.xobjects.len() } }, left_out))
 }
 
 /// A box of the list as pdf-writer's rectangle, whose reals are `f32`.
@@ -210,7 +223,7 @@ fn text_pair(dict: &mut pdf_writer::Dict, key: &[u8], text: &Utf16) {
 }
 
 /// Lowercase hex.
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
