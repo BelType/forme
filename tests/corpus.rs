@@ -46,7 +46,7 @@ fn reordered(value: &Value, descending: bool) -> String {
 #[test]
 fn every_committed_list_reads_and_writes_back_to_the_same_json_value() {
     let corpus = corpus();
-    assert_eq!(corpus.len(), 15, "the fifteen lists");
+    assert_eq!(corpus.len(), 16, "the sixteen lists");
     for (name, _) in &corpus {
         let text = text_of(name);
         let original: Value = serde_json::from_str(&text).unwrap();
@@ -307,7 +307,7 @@ fn every_painted_image_is_the_lists_bytes_in_the_file() {
             seen += 1;
         }
     }
-    assert_eq!(seen, 12, "the images the corpus paints, but the facsimiles");
+    assert_eq!(seen, 15, "the images the corpus paints, but the facsimiles");
 }
 
 /// The colour story on roads, read back by hayro-syntax: the output intent on the catalog with its CMYK profile, `/DefaultRGB` and the `/All` separation on every page, the black-text runs counted; and the oracle's refusals of a profile that is not CMYK, of print marks with no colour story, and of one colourant with two alternates. The record and the content against the oracle's are Caster's `npm run identity -- compare`.
