@@ -5,7 +5,6 @@
 //! - **The dedupe is the oracle's**: a SHA-256 over the payload, the alpha plane, the palette, the profile and a parameter string naming the road, its MIME type or label, the samples' size and `interpolate`, so the XObjects and their names `Im0`, `Im1`, … are the oracle's, the list's images in ascending key, then the facsimiles' Form XObjects ([`crate::facsimile`], `Fc<n>`), then the raster fallbacks'.
 
 use std::collections::BTreeMap;
-use std::io::Read;
 
 use pdf_writer::{Filter, Name, Pdf, Ref};
 use serde::Serialize;
@@ -474,8 +473,8 @@ fn png_passthrough(pdf: &mut Pdf, next: &mut Ref, id: Ref, bytes: &[u8], interpo
         let components = if info.color_type == 2 { 3 } else { 1 };
         match &info.iccp_deflated {
             Some(deflated) => {
-                let mut profile = Vec::new();
-                flate2::read::ZlibDecoder::new(deflated.as_slice()).read_to_end(&mut profile).map_err(|e| Refusal::new(format!("png: the iCCP profile does not inflate: {e}")))?;
+                // hayro-syntax's inflater, the one the facsimile already links.
+                let profile = hayro_syntax::inflate(deflated).ok_or_else(|| Refusal::new("png: the iCCP profile does not inflate".into()))?;
                 (Space::Icc(icc_stream(pdf, next, &profile, components)), "ICCBased", components, true)
             }
             None => {

@@ -411,3 +411,38 @@ fn forme_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
 }
+
+/// A PNG passed through with an `iCCP` chunk, which no corpus file has: its profile, inflated by hayro-syntax's inflater, is the `/ICCBased` stream of the image, byte for byte. Made from cast's PNG with the sRGB profile of roads' colour story put in an `iCCP` after its `IHDR`.
+#[test]
+fn a_passed_through_pngs_iccp_profile_is_inflated_into_its_iccbased_stream() {
+    use hayro_syntax::object::{Array, Dict, Stream};
+    use std::io::Write;
+    let (roads, roads_blobs) = list_of("roads");
+    let profile = roads_blobs[&roads.writing.colour.as_ref().unwrap().profiles.srgb].clone();
+    let (mut list, mut blobs) = list_of("cast");
+    let png = blobs[list.resources.images[&0].blob.as_ref().unwrap()].clone();
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::new(9));
+    z.write_all(&profile).unwrap();
+    let mut payload = b"sRGB\0\0".to_vec();
+    payload.extend(z.finish().unwrap());
+    let mut chunk = (payload.len() as u32).to_be_bytes().to_vec();
+    chunk.extend(b"iCCP");
+    chunk.extend(&payload);
+    chunk.extend([0; 4]);
+    let ihdr_end = 8 + 12 + 13;
+    let with = [&png[..ihdr_end], &chunk, &png[ihdr_end..]].concat();
+    let key = forme_hex(&with);
+    list.resources.images.get_mut(&0).unwrap().blob = Some(key.clone());
+    blobs.insert(key, with);
+    let written = write(&list, &blobs).unwrap();
+    assert_eq!(written.records.images[0].info.icc, "embedded");
+    let pdf = hayro_syntax::Pdf::new(written.bytes).unwrap();
+    let used = &written.records.images[0];
+    let image: Stream = pdf.pages()[used.page].raw().get::<Dict>(b"Resources").and_then(|r| r.get::<Dict>(b"XObject")).and_then(|x| x.get::<Stream>(used.name.as_bytes())).unwrap();
+    let icc = image.dict().get::<Array>(b"ColorSpace").and_then(|a| {
+        let mut items = a.flex_iter();
+        items.next::<hayro_syntax::object::Name>()?;
+        items.next::<Stream>()
+    }).unwrap();
+    assert_eq!(*icc.decoded().unwrap(), profile);
+}

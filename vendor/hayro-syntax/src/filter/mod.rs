@@ -1,4 +1,4 @@
-// forme's copy of hayro-syntax 0.7.2: Flate is the one filter decoded; ASCIIHex, ASCII85, LZW and run-length are named and refused (NOTICE says what changed and why).
+// forme's copy of hayro-syntax 0.7.2: Flate is the one filter decoded; ASCIIHex, ASCII85, LZW and run-length are named and refused; `inflate` is added (NOTICE says what changed and why).
 
 //! Results from decoding filtered data streams.
 
@@ -119,4 +119,9 @@ impl Filter {
 
         res
     }
+}
+
+/// forme: a zlib stream inflated by the Flate filter's own inflater, so forme links one inflater and not two; `None` where it does not inflate.
+pub fn inflate(data: &[u8]) -> Option<Vec<u8>> {
+    lzw_flate::flate::decode(data, &Dict::default())
 }
