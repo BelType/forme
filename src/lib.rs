@@ -9,6 +9,7 @@ pub mod fonts;
 pub mod images;
 pub mod json;
 pub mod list;
+pub mod read;
 pub mod text;
 pub mod tree;
 pub mod validate;
