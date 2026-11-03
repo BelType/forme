@@ -101,16 +101,16 @@ pub struct Program {
 }
 
 /// One segment of a run, as the writer and the ToUnicode map read it: its text and, for each glyph, its id and what it stands for (the cluster's characters on the cluster's first glyph, `None` on the rest).
-struct Segment<'a> {
-    text: &'a [u16],
-    gids: Vec<u16>,
-    texts: Vec<Option<Vec<u16>>>,
-    space_before: bool,
+pub(crate) struct Segment<'a> {
+    pub(crate) text: &'a [u16],
+    pub(crate) gids: Vec<u16>,
+    pub(crate) texts: Vec<Option<Vec<u16>>>,
+    pub(crate) space_before: bool,
 }
 
 impl Segment<'_> {
     /// `textForGlyph`: the characters glyph `j` stands for, empty where it is not its cluster's first.
-    fn text_for(&self, j: usize) -> &[u16] {
+    pub(crate) fn text_for(&self, j: usize) -> &[u16] {
         self.texts[j].as_deref().unwrap_or(&[])
     }
 }
@@ -123,7 +123,7 @@ fn slice(text: &[u16], from: i64, to: i64) -> &[u16] {
 }
 
 /// `segmentViews` and `clusterGroups`: a text item's segments, each glyph's text given by its cluster.
-fn segments(item: &TextItem) -> Vec<Segment<'_>> {
+pub(crate) fn segments(item: &TextItem) -> Vec<Segment<'_>> {
     let text = &item.text.0[..];
     let s = &item.segments;
     let count = s.start.len();
@@ -533,11 +533,23 @@ fn clean_name(name: &str) -> String {
     name.chars().filter(|c| !c.is_whitespace() && !"()<>[]{}/%#".contains(*c)).collect()
 }
 
+/// What the page loop needs of one written instance: the Type 0 font a page names, and how a glyph of the list is shown in it.
+pub struct Embedded {
+    /// The Type 0 font.
+    pub font: Ref,
+    /// The list's glyph id to its CID.
+    pub cids: BTreeMap<u16, u16>,
+    /// The `/W` entry of each glyph of the set, by the list's glyph id, in thousandths of an em at the profile's decimals: what a viewer advances by, so what the pen is tracked by.
+    pub widths: BTreeMap<u16, f64>,
+    /// The text the ToUnicode map gives each glyph that stands for any, by the list's glyph id; an occurrence that stands for other text is wrapped in `/ActualText`.
+    pub chosen: BTreeMap<u16, Vec<u16>>,
+}
+
 /// Every instance of `resources.fonts`, in that order, written into the file: the objects of each, and the Type 0 font a page names as `F0`, `F1`, ….
 ///
 /// # Errors
 /// The oracle's refusals of the ToUnicode map, first, over the whole document; then, instance by instance, every refusal of [`program`], a glyph the subset left with no outline that the face draws, and a list asking for whole fonts, which `print()` never does.
-pub fn write_fonts(pdf: &mut Pdf, next: &mut Ref, list: &DisplayList, blobs: &Blobs) -> Result<(Vec<Ref>, Vec<FaceRecord>), Refusal> {
+pub fn write_fonts(pdf: &mut Pdf, next: &mut Ref, list: &DisplayList, blobs: &Blobs) -> Result<(Vec<Embedded>, Vec<FaceRecord>), Refusal> {
     let profile = &list.writing.font_profile;
     if !profile.subset && !list.resources.fonts.is_empty() {
         return Err(Refusal::new("forme: the display list asks for whole fonts (writing.fontProfile.subset is false), which forme does not write; print() always subsets".into()));
@@ -707,7 +719,7 @@ pub fn write_fonts(pdf: &mut Pdf, next: &mut Ref, list: &DisplayList, blobs: &Bl
             path: "B",
             ms: Timing::default(),
         });
-        refs.push(type0);
+        refs.push(Embedded { font: type0, widths: program.cids.keys().map(|&g| (g, width(g))).collect(), cids: program.cids, chosen: map.map(|m| m.text.clone()).unwrap_or_default() });
     }
     Ok((refs, records))
 }

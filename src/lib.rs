@@ -1,10 +1,11 @@
 //! forme: a PDF 2.0 writer that reads Caster's display list and nothing else, held to the files Caster's TypeScript writer prints from the same lists (*the same list prints the same bytes*, Caster's DESIGN.md S102).
 //!
-//! The whole API is [`write`]: a list and its blobs in, the file out, or a [`Refusal`] in a sentence. The list's schema is [`list`], its refusals before a byte are [`validate`], the content-stream writer is [`content`] and the fonts are [`fonts`]. The writer writes the document's scaffolding (the header, the catalog with `/Version /2.0`, `/Lang` and `/DisplayDocTitle`, every page with its boxes, every font instance as `F0`, `F1`, … in its resources and an empty content stream, the Info dictionary, the XMP packet and the trailer `/ID`) and every font instance's objects, returns the `faces` record beside the bytes, and refuses by name every item kind it does not write yet; [`write_partial`] leaves those items out instead and says which, for the stage gates only, and goes when nothing is left out.
+//! The whole API is [`write`]: a list and its blobs in, the file out, or a [`Refusal`] in a sentence. The list's schema is [`list`], its refusals before a byte are [`validate`], the content-stream writer is [`content`], the fonts are [`fonts`] and the page's marked content and text are [`text`]. The writer writes the document's scaffolding (the header, the catalog with `/Version /2.0`, `/Lang` and `/DisplayDocTitle`, every page with its boxes, every font instance as `F0`, `F1`, … in its resources and its content stream, the Info dictionary, the XMP packet and the trailer `/ID`), every font instance's objects, and each page's marked content and text; it returns the `mcids`, `pens`, `kernAdjustments`, `actualTextSpans` and `faces` records beside the bytes, and refuses by name every item kind it does not write yet and a list with a colour story; [`write_partial`] leaves those out instead and says which, for the stage gates only, and goes when nothing is left out.
 
 pub mod content;
 pub mod fonts;
 pub mod list;
+pub mod text;
 pub mod validate;
 
 use std::collections::BTreeMap;
@@ -46,7 +47,7 @@ impl fmt::Display for Refusal {
 
 impl std::error::Error for Refusal {}
 
-/// The file a list makes, and the records of what the writer chose, as Caster's `WriterRecords` (`src/displayList/contract.ts`) names them: this stage returns the `faces`.
+/// The file a list makes, and the records of what the writer chose, as Caster's `WriterRecords` (`src/displayList/contract.ts`) names them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Written {
     pub bytes: Vec<u8>,
@@ -57,6 +58,14 @@ pub struct Written {
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Records {
+    /// Per page, the index of the content start each MCID opens, by MCID: 0, 1, 2 … in item order.
+    pub mcids: Vec<Vec<usize>>,
+    /// One entry per text item, in painting order.
+    pub pens: Vec<text::Pen>,
+    /// The glyphs whose shaped advance was written as its own adjustment.
+    pub kern_adjustments: usize,
+    /// The glyph occurrences wrapped in `/ActualText`.
+    pub actual_text_spans: usize,
     /// What each font instance became, one per instance in the order of `resources.fonts`.
     pub faces: Vec<fonts::FaceRecord>,
 }
@@ -67,7 +76,7 @@ pub type LeftOut = Vec<(&'static str, usize)>;
 /// The file a list makes.
 ///
 /// # Errors
-/// Every refusal of [`validate::validate`], first; then a blob whose bytes are not its name, an `info.created` that is not an instant in UTC, and an item of a kind this stage does not write, by name.
+/// Every refusal of [`validate::validate`], first; then a blob whose bytes are not its name, a colour story, an `info.created` that is not an instant in UTC, every refusal of [`fonts::write_fonts`], and an item of a kind this stage does not write, by name.
 pub fn write(list: &DisplayList, blobs: &Blobs) -> Result<Written, Refusal> {
     write_with(list, blobs, false).map(|(written, _)| written)
 }
@@ -88,18 +97,13 @@ fn write_with(list: &DisplayList, blobs: &Blobs, partial: bool) -> Result<(Writt
             return Err(Refusal::new(format!("forme: the blob {name} holds bytes whose SHA-256 is {hash}; a blob is named by its bytes")));
         }
     }
+    // The colour story is stage 6's: a list that has one is refused by name; a partial write paints its runs in `fill.rgb`, leaves the story out and says so.
     let mut left_out: LeftOut = Vec::new();
-    for (p, page) in list.pages.iter().enumerate() {
-        for (at, item) in page.items.iter().enumerate() {
-            let kind = item.kind();
-            if !partial {
-                return Err(Refusal::at(format!("forme: item {at} of page {} is a {kind} item, which this stage of forme does not write yet", p + 1), p, at));
-            }
-            match left_out.iter_mut().find(|(k, _)| *k == kind) {
-                Some((_, count)) => *count += 1,
-                None => left_out.push((kind, 1)),
-            }
+    if list.writing.colour.is_some() {
+        if !partial {
+            return Err(Refusal::new("forme: the display list has a colour story (writing.colour), which this stage of forme does not write yet".into()));
         }
+        left_out.push(("colour story", 1));
     }
     let date = pdf_date(&list.info.created)?;
 
@@ -111,8 +115,15 @@ fn write_with(list: &DisplayList, blobs: &Blobs, partial: bool) -> Result<(Writt
     let page_ids: Vec<(Ref, Ref)> = list.pages.iter().map(|_| (next.bump(), next.bump())).collect();
     let info_id = next.bump();
     let xmp_id = next.bump();
-    let (font_ids, faces) = fonts::write_fonts(&mut pdf, &mut next, list, blobs)?;
-    let font_names: Vec<String> = (0..font_ids.len()).map(|i| format!("F{i}")).collect();
+    let (embedded, faces) = fonts::write_fonts(&mut pdf, &mut next, list, blobs)?;
+    let font_names = text::font_names(&embedded);
+    let (contents, counts) = text::pages(list, &embedded, partial)?;
+    for kind in contents.iter().flat_map(|c| &c.left_out) {
+        match left_out.iter_mut().find(|(k, _)| k == kind) {
+            Some((_, count)) => *count += 1,
+            None => left_out.push((kind, 1)),
+        }
+    }
 
     let mut catalog = pdf.catalog(catalog_id);
     catalog.pages(pages_id);
@@ -123,7 +134,7 @@ fn write_with(list: &DisplayList, blobs: &Blobs, partial: bool) -> Result<(Writt
     catalog.finish();
 
     pdf.pages(pages_id).kids(page_ids.iter().map(|&(page, _)| page)).count(page_ids.len() as i32);
-    for (page, &(page_id, content_id)) in list.pages.iter().zip(&page_ids) {
+    for ((page, &(page_id, content_id)), content) in list.pages.iter().zip(&page_ids).zip(&contents) {
         let mut writer = pdf.page(page_id);
         writer.parent(pages_id).media_box(rect(&page.boxes.media));
         if let Some(trim) = &page.boxes.trim {
@@ -135,14 +146,14 @@ fn write_with(list: &DisplayList, blobs: &Blobs, partial: bool) -> Result<(Writt
         // Every page names every instance, `F0`, `F1`, … in the order of `resources.fonts`, as the oracle's `setupPages` does.
         let mut resources = writer.resources();
         let mut fonts = resources.fonts();
-        for (name, &id) in font_names.iter().zip(&font_ids) {
-            fonts.pair(Name(name.as_bytes()), id);
+        for (name, id) in &font_names {
+            fonts.pair(Name(name.as_bytes()), *id);
         }
         fonts.finish();
         resources.finish();
         writer.contents(content_id);
         writer.finish();
-        pdf.stream(content_id, &[]);
+        pdf.stream(content_id, &fonts::deflate(&content.bytes)).filter(pdf_writer::Filter::FlateDecode);
     }
 
     let mut info = pdf.document_info(info_id);
@@ -159,7 +170,7 @@ fn write_with(list: &DisplayList, blobs: &Blobs, partial: bool) -> Result<(Writt
     // ISO 32000-2 §7.5.5 requires an `/ID` of every PDF 2.0 file, and the oracle writes none: both entries are the first 16 bytes of a SHA-256 over the file as written up to the cross-reference table, so the identifier is a function of the list.
     let id = Sha256::digest(pdf.as_bytes())[..16].to_vec();
     pdf.set_file_id((id.clone(), id));
-    Ok((Written { bytes: pdf.finish(), records: Records { faces } }, left_out))
+    Ok((Written { bytes: pdf.finish(), records: Records { mcids: counts.mcids, pens: counts.pens, kern_adjustments: counts.kern_adjustments, actual_text_spans: counts.actual_text_spans, faces } }, left_out))
 }
 
 /// A box of the list as pdf-writer's rectangle, whose reals are `f32`.

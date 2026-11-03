@@ -154,7 +154,7 @@ fn the_same_list_writes_the_same_bytes_twice_and_whatever_its_keys_order() {
 #[test]
 fn the_writer_refuses_by_name_what_this_stage_does_not_write_a_blob_that_is_not_its_name_and_a_date_that_is_not_an_instant() {
     let (mut list, mut blobs) = list_of("cast");
-    assert_eq!(write(&list, &blobs).unwrap_err().message, "forme: item 0 of page 1 is a tag item, which this stage of forme does not write yet");
+    assert_eq!(write(&list, &blobs).unwrap_err().message, "forme: item 1 of page 2 is a image item, which this stage of forme does not write yet");
     let font = list.resources.fonts[0].blob.clone();
     blobs.get_mut(&font).unwrap()[0] ^= 1;
     assert!(write_partial(&list, &blobs).unwrap_err().message.starts_with(&format!("forme: the blob {font} holds bytes whose SHA-256 is ")));

@@ -67,7 +67,7 @@ pub enum Operand<'a> {
     Num(f64),
     /// A name, without its slash, escaped as pdf-lib escapes it.
     Name(&'a str),
-    /// A hex string of these bytes, in lowercase, as Caster's glyph strings are.
+    /// A hex string of these bytes, in uppercase, as pdf-lib writes Caster's glyph strings.
     Hex(&'a [u8]),
     /// An array, as pdf-lib's `PDFArray` writes it: `[ a b ]`, `[ ]` when empty.
     Array(Vec<Operand<'a>>),
@@ -113,7 +113,7 @@ fn write_operand(out: &mut String, operand: &Operand) {
         Operand::Hex(bytes) => {
             out.push('<');
             for byte in *bytes {
-                let _ = write!(out, "{byte:02x}");
+                let _ = write!(out, "{byte:02X}");
             }
             out.push('>');
         }
@@ -186,7 +186,7 @@ mod tests {
         content.op(&[Operand::Raw("[]"), Operand::Num(0.0)], "d");
         content.op(&[Operand::Array(vec![Operand::Hex(&[0x00, 0x17]), Operand::Num(19.0), Operand::Hex(&[0x00, 0x2f])])], "TJ");
         content.op(&[Operand::Name("a b#(")], "Tf");
-        assert_eq!(String::from_utf8(content.finish()).unwrap(), "/Artifact <</Type /Pagination /Subtype /Header>> BDC\n/H1 <</MCID 0>> BDC\n[] 0 d\n[ <0017> 19 <002f> ] TJ\n/a#20b#23#28 Tf\n");
+        assert_eq!(String::from_utf8(content.finish()).unwrap(), "/Artifact <</Type /Pagination /Subtype /Header>> BDC\n/H1 <</MCID 0>> BDC\n[] 0 d\n[ <0017> 19 <002F> ] TJ\n/a#20b#23#28 Tf\n");
     }
 
     /// Every distinct number token of the oracle's content streams, dumped by Caster's `scripts/number-tokens.ts`: parsed as a double and formatted back, each must be the token the oracle wrote.
