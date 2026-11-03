@@ -159,8 +159,11 @@ fn the_same_list_writes_the_same_bytes_twice_and_whatever_its_keys_order() {
 
 #[test]
 fn the_writer_refuses_by_name_what_this_stage_does_not_write_a_blob_that_is_not_its_name_and_a_date_that_is_not_an_instant() {
+    for (name, _) in corpus().into_iter().filter(|(n, _)| !n.starts_with("facsimile")) {
+        let (list, blobs) = list_of(&name);
+        assert_eq!(write(&list, &blobs).unwrap_or_else(|r| panic!("{name}: {r}")).bytes, write_partial(&list, &blobs).unwrap().0.bytes, "{name}: written whole");
+    }
     let (mut list, mut blobs) = list_of("cast");
-    assert_eq!(write(&list, &blobs).unwrap_err().message, "forme: item 31 of page 3 is a shape item, which this stage of forme does not write yet");
     let (facsimile, facsimile_blobs) = list_of("facsimile");
     let refused = write(&facsimile, &facsimile_blobs).unwrap_err().message;
     assert!(refused.starts_with("forme: image 0 (") && refused.ends_with(") is a facsimile, which this stage of forme does not write yet"), "{refused}");
@@ -336,4 +339,26 @@ fn the_colour_story_is_written_and_its_refusals_are_the_oracles() {
     let spot = twice.pages.iter_mut().flat_map(|p| &mut p.items).find_map(|i| match i { Item::Text(t) => match &mut t.fill.ink { Some(list::Ink::Spot(s)) => Some(s), _ => None }, _ => None }).unwrap();
     spot.spot = "All".into();
     assert_eq!(write_partial(&twice, &blobs).unwrap_err().message, "colorResources: the spot \"All\" is declared with two alternates, device-cmyk(0 1 0.65 0.15) and device-cmyk(1 1 1 1)");
+}
+
+#[test]
+fn the_vectors_are_counted_as_the_oracle_counts_them_and_their_refusals_are_its_own() {
+    let (list, blobs) = list_of("vectors");
+    let records = write(&list, &blobs).unwrap().records;
+    assert_eq!(serde_json::from_str::<Value>(&records.vector_resources).unwrap(), serde_json::json!({ "shadings": 1, "patterns": 0, "extGStates": 2, "forms": 3 }));
+    let paint: Vec<Value> = serde_json::from_str(&records.paint).unwrap();
+    assert_eq!(paint.len(), 20);
+    assert!(paint.iter().any(|r| r["kind"] == "form" && r["params"]["reused"] == true), "the marker's form is drawn more than once and written once");
+
+    let (roads, blobs) = list_of("roads");
+    let mut bare = roads.clone();
+    let raster = bare.resources.rasters.values_mut().next().unwrap();
+    raster.blob = None;
+    let feature = raster.feature.clone();
+    let refused = write(&bare, &blobs).unwrap_err().message;
+    assert!(refused.starts_with("vectorEmit: the raster for ") && refused.ends_with(&format!(" ({feature}) was never embedded")), "{refused}");
+    let mut one = roads.clone();
+    let gradient = one.pages.iter_mut().flat_map(|p| &mut p.items).find_map(|i| match i { Item::Path(p) => match &mut p.fill { Some(list::Paint::Gradient(g)) => Some(&mut g.gradient), _ => None }, _ => None }).unwrap();
+    gradient.stops.truncate(1);
+    assert_eq!(write(&one, &blobs).unwrap_err().message, "shading: a gradient needs at least two stops");
 }
