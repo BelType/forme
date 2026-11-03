@@ -208,3 +208,28 @@ fn the_validator_refuses_the_four_other_broken_trees_with_the_oracles_sentences(
         l.structure.elements[a].children.push(moved);
     }, "caster: structure element 1 (Document/H1[0]) lists item 3 of page 1, which opens content for element 2", Some([0.0, 3.0]));
 }
+
+/// The page loop's records against the list they come from: one pen per text item with one adjustment per segment, the first none; the MCIDs of each page its content starts in item order; the two whole lists (text and tags alone) written by `write`; the colour story refused by name. The records against the oracle's are Caster's `npm run identity -- compare`.
+#[test]
+fn the_page_loop_records_every_run_and_content_start_and_refuses_a_colour_story_by_name() {
+    for (name, _) in corpus() {
+        let (list, blobs) = list_of(&name);
+        let records = write_partial(&list, &blobs).unwrap_or_else(|r| panic!("{name}: {r}")).0.records;
+        let texts: Vec<(usize, usize, usize)> = list.pages.iter().enumerate().flat_map(|(p, page)| page.items.iter().enumerate().filter_map(move |(at, i)| match i { Item::Text(t) => Some((p, at, t.segments.x.len())), _ => None })).collect();
+        assert_eq!(records.pens.len(), texts.len(), "{name}: one pen per text item");
+        for (pen, &(p, at, segments)) in records.pens.iter().zip(&texts) {
+            assert_eq!((pen.page, pen.item, pen.adjustments.len()), (p, at, segments), "{name}: the pen of item {at} of page {p}");
+            assert!(pen.adjustments[0].is_none() && pen.adjustments[1..].iter().all(Option::is_some), "{name}: none before the first segment only");
+        }
+        for (page, mcids) in list.pages.iter().zip(&records.mcids) {
+            let starts: Vec<usize> = page.items.iter().enumerate().filter(|(_, i)| matches!(i, Item::TagStart(t) if matches!(t.start, TagStart::Content(_)))).map(|(at, _)| at).collect();
+            assert_eq!(mcids, &starts, "{name}: the MCIDs are the content starts in item order");
+        }
+        let whole = list.pages.iter().flat_map(|p| &p.items).all(|i| matches!(i, Item::Text(_) | Item::TagStart(_) | Item::TagEnd(_)));
+        if list.writing.colour.is_some() {
+            assert_eq!(write(&list, &blobs).unwrap_err().message, "forme: the display list has a colour story (writing.colour), which this stage of forme does not write yet");
+        } else if whole {
+            assert_eq!(write(&list, &blobs).unwrap().bytes, write_partial(&list, &blobs).unwrap().0.bytes, "{name}: nothing left out");
+        }
+    }
+}
