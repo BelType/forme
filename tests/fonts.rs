@@ -311,7 +311,7 @@ fn every_instance_of_every_list_reads_back_as_the_list_says_and_as_the_oracle_wr
         }
     }
     println!("fonts reader: {tally:?}");
-    assert_eq!((tally.lists, tally.cff, tally.cff2), (15, 1, 1), "fifteen lists, one CFF instance, one CFF2 instance");
+    assert_eq!((tally.lists, tally.cff, tally.cff2), (17, 1, 1), "seventeen lists, one CFF instance, one CFF2 instance");
     assert_eq!(tally.patches, 0, "subsetter agrees with HarfBuzz on every glyph the corpus shows");
 }
 
