@@ -29,3 +29,5 @@ Run `cargo build` for the library and the binary, then `cargo test` with a Caste
 | hayro-write | 0.7.0, forme's copy under `vendor/hayro-write` | the facsimile's page copied as a Form XObject; the copy writes the form as pdf-lib does and asks hayro-syntax for `std` alone, as `NOTICE` says |
 | hayro-syntax | 0.7.2, forme's copy under `vendor/hayro-syntax` | the facsimile's PDF read, as `NOTICE` says |
 | wasm-bindgen, js-sys | 0.2.129, 0.3.106, the module only | the tab's face; wasm-bindgen with `std` alone, so `serde-serialize` stays off |
+
+**What a facsimile page leaves behind.** forme copies a facsimile's page as a Form XObject without five keys that pdf-lib copies and hayro-write drops: `/Metadata`, `/StructParent`, `/StructParents`, `/OC` and `/AF`. Egildo ruled on 2026-11-03 that they stay dropped (ruling 14 of the plan). The structure keys and `/OC` would point into the source's structure tree and its optional-content definitions, and neither is copied, so in the new file they would point at nothing. The metadata and the associated files describe the source document, not the page placed in this one.
