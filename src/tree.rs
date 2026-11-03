@@ -9,6 +9,7 @@ use pdf_writer::{Finish, Name, Obj, Pdf, Ref, Str, TextStr};
 
 use crate::Refusal;
 use crate::list::{Attribute, DisplayList, Item, LinkItem, StructChild};
+use crate::read::Value;
 
 /// The validator's `ATTRIBUTE_KEYS`: the order an attribute object's keys are written in.
 const ATTRIBUTE_KEYS: [&str; 8] = ["O", "ListNumbering", "BBox", "Scope", "Headers", "RowSpan", "ColSpan", "TextPosition"];
@@ -230,16 +231,16 @@ fn attribute(obj: Obj, attribute: &Attribute) {
         let Some(value) = attribute.get(key) else { continue };
         let entry = dict.insert(Name(key.as_bytes()));
         match value {
-            serde_json::Value::String(s) => entry.primitive(Name(s.as_bytes())),
-            serde_json::Value::Number(n) => number(entry, n.as_f64().unwrap_or_default()),
-            serde_json::Value::Array(values) => {
+            Value::Str(s) => entry.primitive(Name(s.as_bytes())),
+            Value::Num(n) => number(entry, *n),
+            Value::Array(values) => {
                 let mut array = entry.array();
                 for v in values {
                     match v {
-                        serde_json::Value::String(s) if key == "Headers" => array.item(Str(s.as_bytes())),
-                        serde_json::Value::String(s) => array.item(Name(s.as_bytes())),
+                        Value::Str(s) if key == "Headers" => array.item(Str(s.as_bytes())),
+                        Value::Str(s) => array.item(Name(s.as_bytes())),
                         v => {
-                            number(array.push(), v.as_f64().unwrap_or_default());
+                            number(array.push(), if let Value::Num(n) = v { *n } else { 0.0 });
                             &mut array
                         }
                     };

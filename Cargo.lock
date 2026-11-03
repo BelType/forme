@@ -145,6 +145,7 @@ name = "forme"
 version = "0.1.0"
 dependencies = [
  "flate2",
+ "forme",
  "hayro-syntax",
  "hayro-write",
  "pdf-writer",

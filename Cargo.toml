@@ -12,14 +12,22 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 pdf-writer = "=0.15.0"
-serde = { version = "=1.0.229", features = ["derive"] }
-serde_json = { version = "=1.0.154", features = ["float_roundtrip", "raw_value"] }
+serde = { version = "=1.0.229", features = ["derive"], optional = true }
+serde_json = { version = "=1.0.154", features = ["float_roundtrip", "raw_value"], optional = true }
 sha2 = "=0.11.1"
 subsetter = "=0.2.6"
 skrifa = "=0.42.1"
 flate2 = "=1.1.10"
 hayro-write = "=0.7.0"
 hayro-syntax = { version = "=0.7.2", default-features = false, features = ["std"] }
+
+# The list is read by hand (src/read.rs) and links no serde. The tests write a list back through serde's Serialize, derived under this feature, to hold the reader's keys to the schema's names, and read the oracle's JSON with serde_json; forme names itself as a dev-dependency so `cargo test` turns the feature on and the module never does.
+[features]
+serde = ["dep:serde", "dep:serde_json"]
+
+[dev-dependencies]
+forme = { path = ".", features = ["serde"] }
+serde_json = { version = "=1.0.154", features = ["float_roundtrip", "raw_value"] }
 
 # The module's size is measured under this profile: `cargo rustc --lib --profile wasm --target wasm32-unknown-unknown --crate-type cdylib`. cargo performs no LTO on a library whose crate types include `rlib`, so `cargo build --lib` builds the module without it.
 [profile.wasm]

@@ -128,7 +128,7 @@ fn the_validator_refuses_the_twenty_one_broken_lists_with_the_oracles_sentences(
     }, "caster: the content start at item 0 of page 1 is in no element's children", Some([0.0, 0.0]));
     refused("paper", &|l| {
         let e = l.structure.elements.iter_mut().find(|x| x.attributes.is_some()).unwrap();
-        e.attributes.as_mut().unwrap()[0].0.push(("Placement".into(), Value::String("Block".into())));
+        e.attributes.as_mut().unwrap()[0].0.push(("Placement".into(), forme::read::Value::Str("Block".into())));
     }, "caster: structure element 22 (Document/P[4]/Span[4]) carries an attribute object with the key Placement, which the schema does not name", None);
     refused("paper", &|l| { let last = *links(l).last().unwrap(); let link = link_at!(l, last); link.order = list::Num(link.order.0 + 1.0); }, "caster: the link at place 4 among the document's links has order 5; the orders run 0, 1, 2 …, and the /StructParent numbering follows them", None);
     refused("roads", &|l| {
