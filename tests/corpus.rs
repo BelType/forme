@@ -608,3 +608,52 @@ fn a_non_text_item_and_a_page_end_close_the_open_line() {
     assert_eq!(&ops[et..=bt], ["ET", "q", "cm", "Do", "Q", "q", "rg", "re", "f", "Q", "BT"]);
     assert_eq!(written.records.pens.len(), 7);
 }
+
+/// Caster's hand-made list of `test/standard.test.ts`, made the same way: the photo list with every text item's space glyph 0, as the builder writes it for a face with no space, and a width for glyph 0, which the builder asks for every space glyph it names.
+fn spaceless(conformance: &str) -> (DisplayList, list::Blobs) {
+    let mut value: Value = serde_json::from_str(&text_of("photo")).unwrap();
+    value["info"]["conformance"] = serde_json::json!(conformance);
+    for item in value["pages"].as_array_mut().unwrap().iter_mut().flat_map(|page| page["items"].as_array_mut().unwrap().iter_mut()) {
+        if item["kind"] == "text" {
+            item["space"] = serde_json::json!(0);
+        }
+    }
+    for font in value["resources"]["fonts"].as_array_mut().unwrap() {
+        font["widths"]["gids"].as_array_mut().unwrap().insert(0, serde_json::json!(0));
+        font["widths"]["units"].as_array_mut().unwrap().insert(0, serde_json::json!(500));
+    }
+    let list = list::parse(&value.to_string()).unwrap();
+    let blobs = read_blobs(&list, &lists().join("blobs")).unwrap();
+    (list, blobs)
+}
+
+/// The glyphs every `TJ` of the first page shows.
+fn shown(bytes: Vec<u8>) -> usize {
+    let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+    let content = String::from_utf8_lossy(pdf.pages()[0].page_stream().unwrap()).into_owned();
+    content.split("TJ").filter_map(|part| part.rfind('[').map(|at| &part[at..])).flat_map(|array| array.split('<').skip(1).map(|hex| hex.split('>').next().unwrap().len() / 4)).sum()
+}
+
+/// *PDF/UA-2 is a flag, not a given* (Caster's DESIGN.md S103): a word gap in a face with no space glyph is refused by name under a list claiming PDF/UA-2, and written as positioning with no glyph, in an XMP claiming nothing, under a list claiming nothing.
+#[test]
+fn a_gap_with_no_space_glyph_is_refused_under_the_claim_and_positioning_without_it() {
+    let (list, blobs) = spaceless("pdfua2");
+    let refusal = write(&list, &blobs).map(|_| ()).unwrap_err();
+    assert!(refusal.message.starts_with("caster: the face ") && refusal.message.contains(") has no space glyph, so the word gap in text item ") && refusal.message.ends_with("or print with `standard: 'none'`, which claims no standard and writes the gap as positioning with no glyph"), "{}", refusal.message);
+    assert_eq!(refusal.list_item.map(|at| at[0]), Some(0.0));
+
+    let (claimed, blobs) = list_of("photo");
+    let texts: Vec<_> = claimed.pages[0].items.iter().filter_map(|item| if let Item::Text(text) = item { Some(text) } else { None }).collect();
+    let glyphs: usize = texts.iter().map(|t| t.glyphs.ids.len()).sum();
+    let gaps: usize = texts.iter().map(|t| usize::from(t.leading_space) + t.segments.space_before.iter().skip(1).filter(|&&g| g).count()).sum();
+    assert!(gaps > 0);
+    let bytes = write(&claimed, &blobs).unwrap().bytes;
+    assert!(String::from_utf8_lossy(&bytes).contains("pdfd:declarations"), "the XMP claims PDF/UA-2 and declares Well-Tagged PDF");
+    assert_eq!(shown(bytes), glyphs + gaps, "with a space glyph, every gap is one glyph");
+
+    let (none, blobs) = spaceless("tagged");
+    let bytes = write(&none, &blobs).unwrap().bytes;
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    assert!(!text.contains("pdfuaid") && !text.contains("pdfd:declarations"), "the XMP claims nothing");
+    assert_eq!(shown(bytes), glyphs, "with no space glyph, no gap shows a glyph");
+}

@@ -235,11 +235,13 @@ fn usages(list: &DisplayList) -> BTreeMap<&str, Usage> {
             let Item::Text(text) = item else { continue };
             let usage = out.entry(text.font.as_str()).or_default();
             let space_gid = text.space.0 as u16;
-            if text.leading_space {
+            // A space of glyph 0 is shown as positioning alone (S103), so it records no use.
+            let gap = space_gid != 0;
+            if text.leading_space && gap {
                 usage.record(space_gid, &space);
             }
             for (index, segment) in segments(text).iter().enumerate() {
-                if index > 0 && segment.space_before {
+                if index > 0 && segment.space_before && gap {
                     usage.record(space_gid, &space);
                 }
                 for (j, &gid) in segment.gids.iter().enumerate() {

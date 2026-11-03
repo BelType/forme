@@ -249,8 +249,11 @@ fn run(c: &mut Content, item: &TextItem, font: &Embedded, name: &str, upem: f64,
     let space = item.space.0 as u16;
     let width = |gid: u16| font.widths.get(&gid).copied().unwrap_or(0.0);
     let cids = |gids: &[u16]| -> Vec<u8> { gids.iter().flat_map(|g| font.cids.get(g).copied().unwrap_or(0).to_be_bytes()).collect() };
+    // A face with no space glyph has `space: 0`, and a list that claims nothing writes its gaps as positioning with no glyph (*PDF/UA-2 is a flag, not a given*, Caster's DESIGN.md S103; a list claiming PDF/UA-2 with such a gap was refused by the validator).
+    let gap = space != 0;
+    let leading = item.leading_space && gap;
     let space_adv = (width(space) / 1000.0) * size;
-    let start = round3(item.segments.x[0].0 - if item.leading_space { space_adv + tc } else { 0.0 });
+    let start = round3(item.segments.x[0].0 - if leading { space_adv + tc } else { 0.0 });
     if let Some(ops) = colour {
         ops.write_setup(c);
     }
@@ -277,7 +280,7 @@ fn run(c: &mut Content, item: &TextItem, font: &Embedded, name: &str, upem: f64,
         shown.clear();
     };
     let mut pen = start;
-    if item.leading_space {
+    if leading {
         shown.push(Shown::Glyphs(cids(&[space])));
         pen += space_adv + tc;
     }
@@ -286,8 +289,9 @@ fn run(c: &mut Content, item: &TextItem, font: &Embedded, name: &str, upem: f64,
         let mut emitted = None;
         if index > 0 {
             let next = item.segments.x[index].0;
-            let adj = if segment.space_before { round3((-(next - pen - space_adv - tc) / size) * 1000.0) } else { round3((-(next - pen) / size) * 1000.0) };
-            if segment.space_before {
+            let spaced = segment.space_before && gap;
+            let adj = if spaced { round3((-(next - pen - space_adv - tc) / size) * 1000.0) } else { round3((-(next - pen) / size) * 1000.0) };
+            if spaced {
                 shown.push(Shown::Glyphs(cids(&[space])));
                 pen += space_adv + tc;
             }

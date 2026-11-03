@@ -1,12 +1,12 @@
 //! The refusals of a list the writer could not write, each a sentence, before a byte is written: Caster's `validateList` (`src/displayList/validate.ts`), ported check for check, in its order, with its sentences.
 //!
-//! What it holds: the version (read first, by [`crate::list::parse`]); every blob key a resource names; each image's samples in a shape the schema names, as many bytes as it says (version 6); the font instances (unique keys, sorted widths, a width for every glyph a text item shows and every space glyph it names); every image and raster key a page item names; the marked content of each page (no end without a start, none left open); the links (`order` running 0, 1, 2 … over the document, a destination or a URI on each); the structure tree (an element index anywhere in range, one parent each, no cycle, a content child that is a content start naming its element back, every content start some element's child, a link child owned by the link's element, the attribute keys the schema names). What it leaves to the writer is what only writing finds. A number in a sentence is written as JavaScript's `String` writes it, so a sentence is the oracle's to the character.
+//! What it holds: the version (read first, by [`crate::list::parse`]); every blob key a resource names; each image's samples in a shape the schema names, as many bytes as it says (version 6); the font instances (unique keys, sorted widths, a width for every glyph a text item shows and every space glyph it names); under a PDF/UA-2 claim, no word gap of a face with no space glyph; every image and raster key a page item names; the marked content of each page (no end without a start, none left open); the links (`order` running 0, 1, 2 … over the document, a destination or a URI on each); the structure tree (an element index anywhere in range, one parent each, no cycle, a content child that is a content start naming its element back, every content start some element's child, a link child owned by the link's element, the attribute keys the schema names). What it leaves to the writer is what only writing finds. A number in a sentence is written as JavaScript's `String` writes it, so a sentence is the oracle's to the character.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::Refusal;
 use crate::content::js_string;
-use crate::list::{Blobs, DisplayList, Item, LinkItem, Num, StructChild, StructElement, TagStart, json_string};
+use crate::list::{Blobs, Conformance, DisplayList, Item, LinkItem, Num, StructChild, StructElement, TagStart, json_string};
 
 /// The keys an attribute object of `/A` may carry, which the writer writes in this order.
 pub const ATTRIBUTE_KEYS: [&str; 8] = ["O", "ListNumbering", "BBox", "Scope", "Headers", "RowSpan", "ColSpan", "TextPosition"];
@@ -22,6 +22,7 @@ pub fn validate(list: &DisplayList, blobs: &Blobs) -> Result<(), Refusal> {
     check_blobs(list, blobs)?;
     check_samples(list, blobs)?;
     check_fonts(list)?;
+    check_gaps(list)?;
     check_items(list)?;
     check_links(list)?;
     check_tree(list)
@@ -112,6 +113,24 @@ fn check_fonts(list: &DisplayList) -> Result<(), Refusal> {
                     return Err(Refusal::at(format!("caster: the display list holds no width for glyph {} of {}; the builder writes one for every glyph a text item shows and every space glyph it names", js_string(gid.0), text.font), p, at));
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+/// A list that claims PDF/UA-2 shows no word gap as glyph 0 (*PDF/UA-2 is a flag, not a given*, Caster's DESIGN.md S103): a text item's `space` is 0 when its face has no space glyph, and a gap it owes (`leadingSpace`, or `spaceBefore` past the first segment) would show `.notdef`, which PDF/UA-2 forbids (ISO 14289-2, 8.4.5.9). Under a list that claims nothing the writer writes such a gap as positioning with no glyph.
+fn check_gaps(list: &DisplayList) -> Result<(), Refusal> {
+    if list.info.conformance != Conformance::Pdfua2 {
+        return Ok(());
+    }
+    for (p, page) in list.pages.iter().enumerate() {
+        for (at, item) in page.items.iter().enumerate() {
+            let Item::Text(text) = item else { continue };
+            if text.space.0 != 0.0 || !(text.leading_space || text.segments.space_before.iter().skip(1).any(|&gap| gap)) {
+                continue;
+            }
+            let family = list.resources.fonts.iter().find(|instance| instance.key == text.font).map(|instance| instance.family.as_str()).filter(|family| !family.is_empty()).unwrap_or(&text.font);
+            return Err(Refusal::at(format!("caster: the face {family} ({}) has no space glyph, so the word gap in text item {at} of page {} would be glyph 0, .notdef, which PDF/UA-2 forbids a file to show (ISO 14289-2, 8.4.5.9); give the text a face with a space, or print with `standard: 'none'`, which claims no standard and writes the gap as positioning with no glyph", text.font, p + 1), p, at));
         }
     }
     Ok(())
