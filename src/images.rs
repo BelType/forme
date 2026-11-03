@@ -2,10 +2,9 @@
 //!
 //! - **One decision per image**: is there a filter that reads this file? A JPEG goes to `/DCTDecode` as it is, its component count the colour space, its APP14 Adobe marker a CMYK `/Decode [1 0 1 0 1 0 1 0]`, its APP2 profile an `/ICCBased` stream, an arithmetic-coded one handed through unread; a PNG whose `IDAT` `/Predictor 15` describes goes to `/FlateDecode` as it is, with `/DecodeParms`, its palette an `/Indexed` space, its `iCCP` an `/ICCBased` stream, its grey or RGB `tRNS` a colour-key `/Mask`. Any other PNG reached the list as samples (version 6, Egildo's ruling of 2026-11-03), so forme decodes nothing and links no PNG decoder.
 //! - **Samples** are split from their interleaved alpha, at one or two bytes a sample, and the `/SMask` is written only where some pixel is not opaque; their colour space is the list's (`DeviceRGB`, `DeviceGray`, a palette's `/Indexed`, a profile's `/ICCBased`). The photo rule's JPEG is a JPEG under `/DCTDecode`.
-//! - **The dedupe is the oracle's**: a SHA-256 over the payload, the alpha plane, the palette, the profile and a parameter string naming the road, its MIME type or label, the samples' size and `interpolate`, so the XObjects and their names `Im0`, `Im1`, … are the oracle's, the list's images in ascending key, then the raster fallbacks'.
-//! - **What is left**: the facsimile (stage 8), refused by name.
+//! - **The dedupe is the oracle's**: a SHA-256 over the payload, the alpha plane, the palette, the profile and a parameter string naming the road, its MIME type or label, the samples' size and `interpolate`, so the XObjects and their names `Im0`, `Im1`, … are the oracle's, the list's images in ascending key, then the facsimiles' Form XObjects ([`crate::facsimile`], `Fc<n>`), then the raster fallbacks'.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::io::Read;
 
 use pdf_writer::{Filter, Name, Pdf, Ref};
@@ -67,8 +66,6 @@ pub struct Images {
     pub of_source: BTreeMap<u32, usize>,
     /// The XObject of each raster fallback with pixels, by its key in `resources.rasters`.
     pub of_raster: BTreeMap<u32, usize>,
-    /// The facsimiles a partial write left out, by key.
-    pub facsimiles: BTreeSet<u32>,
 }
 
 /// What an image hands the embed: a file, the photo rule's JPEG, or samples split into planes.
@@ -92,11 +89,11 @@ struct Samples<'a> {
     gamma_only: bool,
 }
 
-/// Embed every painted image of the list, in ascending key, then every raster fallback with pixels, deduplicating by the oracle's key.
+/// Embed every painted image of the list, in ascending key, then every painted facsimile, then every raster fallback with pixels, deduplicating by the oracle's key.
 ///
 /// # Errors
-/// A facsimile, unless `partial`; a JPEG or a PNG the oracle refuses, in its sentence, wrapped as the oracle wraps it with the element.
-pub fn write(pdf: &mut Pdf, next: &mut Ref, list: &DisplayList, blobs: &Blobs, partial: bool) -> Result<Images, Refusal> {
+/// A JPEG or a PNG the oracle refuses, in its sentence, wrapped as the oracle wraps it with the element; every refusal of [`crate::facsimile::write`].
+pub fn write(pdf: &mut Pdf, next: &mut Ref, list: &DisplayList, blobs: &Blobs) -> Result<Images, Refusal> {
     let mut images = Images::default();
     let mut by_hash: BTreeMap<String, usize> = BTreeMap::new();
     // What each painted image is interpolated by: the last item to paint it decides, as in the oracle.
@@ -108,17 +105,15 @@ pub fn write(pdf: &mut Pdf, next: &mut Ref, list: &DisplayList, blobs: &Blobs, p
             }
         }
     }
+    let mut facsimiles = Vec::new();
     for (&key, source) in &list.resources.images {
         let Some(&interpolate) = interpolate_of.get(&key) else { continue };
         if source.blob.is_none() && source.samples.is_none() && source.jpeg.is_none() {
             continue;
         }
+        // Embedded after the loop, all together, one copy per source file, as the oracle's `embedFacsimiles`.
         if source.kind == ImageKind::Facsimile {
-            // ponytail: a facsimile left out takes no slot in the dedupe, so a raster fallback after it in the same list would be named one lower than the oracle's; no list has both, and stage 8 writes the facsimile.
-            if !partial {
-                return Err(Refusal::new(format!("forme: image {key} ({}) is a facsimile, which this stage of forme does not write yet", source.dom_path)));
-            }
-            images.facsimiles.insert(key);
+            facsimiles.push((key, source));
             continue;
         }
         let wrap = |r: Refusal| {
@@ -129,6 +124,7 @@ pub fn write(pdf: &mut Pdf, next: &mut Ref, list: &DisplayList, blobs: &Blobs, p
         let at = embed_one(pdf, next, &mut images, &mut by_hash, &embed, interpolate).map_err(wrap)?;
         images.of_source.insert(key, at);
     }
+    crate::facsimile::write(pdf, next, blobs, &facsimiles, &mut images, &mut by_hash)?;
     for (&key, raster) in &list.resources.rasters {
         let Some(blob) = &raster.blob else { continue };
         let embed = match &raster.jpeg {

@@ -1,3 +1,4 @@
+// forme's copy of hayro-write 0.7.0: `write_xobject` writes the page's content, matrix and group as pdf-lib does (NOTICE says what changed and why).
 /*!
 A crate for converting PDF pages into either `XObjects` or a new page via [`pdf-writer`](https://docs.rs/pdf-writer/).
 
@@ -19,7 +20,7 @@ use flate2::write::ZlibEncoder;
 use hayro_syntax::object::Dict;
 use hayro_syntax::object::Object;
 use hayro_syntax::object::dict::keys::{
-    COLORSPACE, EXT_G_STATE, FONT, GROUP, PATTERN, PROPERTIES, SHADING, XOBJECT,
+    COLORSPACE, CONTENTS, EXT_G_STATE, FONT, GROUP, PATTERN, PROPERTIES, SHADING, XOBJECT,
 };
 use hayro_syntax::object::{MaybeRef, ObjRef};
 use hayro_syntax::page::{Page, Resources, Rotation};
@@ -369,19 +370,35 @@ fn write_page(
 fn write_xobject<G>(
     page: &Page<'_>,
     xobj_ref: Ref,
-    write_xobject_group_cs: &mut G,
+    // forme: unused, since forme's copy writes no /Group (below).
+    _write_xobject_group_cs: &mut G,
     ctx: &mut ExtractionContext<'_>,
 ) -> Result<(), ExtractionError>
 where
     G: for<'b> FnMut(&mut pdf_writer::writers::Group<'b>),
 {
     let mut chunk = Chunk::with_settings(ctx.chunk_settings);
-    let encoded_stream = deflate_encode(page.page_stream().unwrap_or(b""));
+    // forme: the content as pdf-lib's `embedPages` writes it after Caster's reopen, so the form is the oracle's: the page normalised twice (a `q` stream before and a `Q` stream after, once on the reopen and once on the copy), and every stream decoded and followed by a newline.
+    let mut content = b"q\n\nq\n\n".to_vec();
+    let mut push = |stream: hayro_syntax::object::Stream<'_>| {
+        if let Ok(data) = stream.decoded() {
+            content.extend_from_slice(&data);
+        }
+        content.push(b'\n');
+    };
+    if let Some(stream) = page.raw().get::<hayro_syntax::object::Stream<'_>>(CONTENTS) {
+        push(stream);
+    } else if let Some(array) = page.raw().get::<hayro_syntax::object::Array<'_>>(CONTENTS) {
+        array.iter::<hayro_syntax::object::Stream<'_>>().for_each(push);
+    }
+    content.extend_from_slice(b"Q\n\nQ\n\n");
+    let encoded_stream = deflate_encode(&content);
     let mut x_object = chunk.form_xobject(xobj_ref, &encoded_stream);
     x_object.deref_mut().filter(Filter::FlateDecode);
+    // forme: `/FormType 1`, as pdf-lib writes it.
+    x_object.deref_mut().pair(Name(b"FormType"), 1);
 
     let bbox = page.crop_box();
-    let initial_transform = page.initial_transform(false);
 
     x_object.bbox(Rect::new(
         bbox.x0 as f32,
@@ -390,24 +407,12 @@ where
         bbox.y1 as f32,
     ));
 
-    let i = initial_transform.as_coeffs();
-    x_object.matrix([
-        i[0] as f32,
-        i[1] as f32,
-        i[2] as f32,
-        i[3] as f32,
-        i[4] as f32,
-        i[5] as f32,
-    ]);
+    // forme: pdf-lib's matrix, which moves the crop box to the origin and reads neither the rotation nor the media box (Caster refuses a rotated page before the list).
+    x_object.matrix([1.0, 0.0, 0.0, 1.0, -bbox.x0 as f32, -bbox.y0 as f32]);
 
     serialize_resources(page.resources(), ctx, &mut x_object);
 
-    // Latex seems to isolate all embedded PDFs which makes sense, so we also
-    // do the same. See also https://github.com/typst/typst/issues/7269.
-    let mut group = x_object.group();
-    group.transparency().isolated(true);
-    write_xobject_group_cs(&mut group);
-    group.finish();
+    // forme: no /Group, as pdf-lib writes none; upstream isolates every embedded page here.
 
     x_object.finish();
     ctx.chunks.push(chunk);

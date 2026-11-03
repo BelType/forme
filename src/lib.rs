@@ -1,9 +1,10 @@
 //! forme: a PDF 2.0 writer that reads Caster's display list and nothing else, held to the files Caster's TypeScript writer prints from the same lists (*the same list prints the same bytes*, Caster's DESIGN.md S102).
 //!
-//! The whole API is [`write`]: a list and its blobs in, the file out, or a [`Refusal`] in a sentence. The list's schema is [`list`], its refusals before a byte are [`validate`], the content-stream writer is [`content`], the fonts are [`fonts`], the image XObjects are [`images`], the colour story is [`colour`], the vector items are [`vectors`], the page's marked content, text, images, rectangles and print marks are [`text`], and the structure tree and what points into it are [`tree`]. The writer writes the document's scaffolding (the header, the catalog with `/Version /2.0`, `/Lang`, `/DisplayDocTitle`, `/StructTreeRoot`, `/MarkInfo`, `/Outlines` and `/PageLabels`, every page with its boxes, `/Tabs /S`, `/StructParents` and its link annotations, every font instance as `F0`, `F1`, … in its resources and its content stream, the Info dictionary, the XMP packet and the trailer `/ID`), every font instance's objects, every image XObject the list's images and raster fallbacks make (each page naming those it paints), each page's marked content, text, images, rectangles, print marks and vector items (paths, shadings, patterns, graphics states, groups, forms and raster fallbacks), the colour story (the output intent, `/DefaultRGB`, the separations and the overprint states), and the tree; it returns the `mcids`, `pens`, `kernAdjustments`, `actualTextSpans`, `faces`, `images`, `xobjects`, `paint`, `vectorResources` and `colour` records beside the bytes, and refuses by name the one item kind it does not write yet, the facsimile; [`write_partial`] leaves those out instead and says which, for the stage gates only, and goes when nothing is left out.
+//! The whole API is [`write`]: a list and its blobs in, the file out, or a [`Refusal`] in a sentence. The list's schema is [`list`], its refusals before a byte are [`validate`], the content-stream writer is [`content`], the fonts are [`fonts`], the image XObjects are [`images`], the facsimiles' Form XObjects are [`facsimile`], the colour story is [`colour`], the vector items are [`vectors`], the page's marked content, text, images, rectangles and print marks are [`text`], and the structure tree and what points into it are [`tree`]. The writer writes the document's scaffolding (the header, the catalog with `/Version /2.0`, `/Lang`, `/DisplayDocTitle`, `/StructTreeRoot`, `/MarkInfo`, `/Outlines` and `/PageLabels`, every page with its boxes, `/Tabs /S`, `/StructParents` and its link annotations, every font instance as `F0`, `F1`, … in its resources and its content stream, the Info dictionary, the XMP packet and the trailer `/ID`), every font instance's objects, every image XObject the list's images and raster fallbacks make and every facsimile's Form XObject (each page naming those it paints), each page's marked content, text, images, rectangles, print marks and vector items (paths, shadings, patterns, graphics states, groups, forms and raster fallbacks), the colour story (the output intent, `/DefaultRGB`, the separations and the overprint states), and the tree; it returns the `mcids`, `pens`, `kernAdjustments`, `actualTextSpans`, `faces`, `images`, `xobjects`, `paint`, `vectorResources` and `colour` records beside the bytes. It writes every item kind of the list but the dormant colour cluster, which it refuses by name.
 
 pub mod colour;
 pub mod content;
+pub mod facsimile;
 pub mod fonts;
 pub mod images;
 pub mod list;
@@ -92,26 +93,11 @@ fn raw_json<S: serde::Serializer>(text: &str, s: S) -> Result<S::Ok, S::Error> {
     serde::Serialize::serialize(&serde_json::value::RawValue::from_string(text.to_string()).map_err(serde::ser::Error::custom)?, s)
 }
 
-/// The item kinds a partial write left out, each with how many, in the kinds' order of first appearance.
-pub type LeftOut = Vec<(&'static str, usize)>;
-
 /// The file a list makes.
 ///
 /// # Errors
-/// Every refusal of [`validate::validate`], first; then a blob whose bytes are not its name, an `info.created` that is not an instant in UTC, every refusal of [`fonts::write_fonts`] and of [`colour::Colour`], and an item of a kind this stage does not write, by name.
+/// Every refusal of [`validate::validate`], first; then a blob whose bytes are not its name, an `info.created` that is not an instant in UTC, every refusal of [`fonts::write_fonts`], of [`images::write`] and of [`colour::Colour`], and a colour-cluster item, by name.
 pub fn write(list: &DisplayList, blobs: &Blobs) -> Result<Written, Refusal> {
-    write_with(list, blobs, false).map(|(written, _)| written)
-}
-
-/// The file a list makes with the items this stage does not write left out, and how many of each kind were, in the kinds' order of first appearance. For the stage gates only: it goes with the last item kind built.
-///
-/// # Errors
-/// As [`write`], but for the item kinds left out.
-pub fn write_partial(list: &DisplayList, blobs: &Blobs) -> Result<(Written, LeftOut), Refusal> {
-    write_with(list, blobs, true)
-}
-
-fn write_with(list: &DisplayList, blobs: &Blobs, partial: bool) -> Result<(Written, LeftOut), Refusal> {
     validate::validate(list, blobs)?;
     for (name, bytes) in blobs {
         let hash = hex(&Sha256::digest(bytes));
@@ -119,7 +105,6 @@ fn write_with(list: &DisplayList, blobs: &Blobs, partial: bool) -> Result<(Writt
             return Err(Refusal::new(format!("forme: the blob {name} holds bytes whose SHA-256 is {hash}; a blob is named by its bytes")));
         }
     }
-    let mut left_out: LeftOut = Vec::new();
     let date = pdf_date(&list.info.created)?;
 
     let mut pdf = Pdf::new();
@@ -132,17 +117,11 @@ fn write_with(list: &DisplayList, blobs: &Blobs, partial: bool) -> Result<(Writt
     let xmp_id = next.bump();
     let (embedded, faces) = fonts::write_fonts(&mut pdf, &mut next, list, blobs)?;
     let mut colour = colour::Colour::new(list, blobs)?;
-    let images = images::write(&mut pdf, &mut next, list, blobs, partial)?;
+    let images = images::write(&mut pdf, &mut next, list, blobs)?;
     let font_names = text::font_names(&embedded);
     let mut vectors = vectors::Vectors::new(&mut pdf, &mut next, list, &images);
-    let (contents, counts) = text::pages(list, &embedded, &images, colour.as_mut(), &mut vectors, partial)?;
+    let (contents, counts) = text::pages(list, &embedded, &images, colour.as_mut(), &mut vectors)?;
     let (paint, vector_resources) = (format!("[{}]", vectors.paint.join(",")), vectors.counts());
-    for kind in contents.iter().flat_map(|c| &c.left_out) {
-        match left_out.iter_mut().find(|(k, _)| k == kind) {
-            Some((_, count)) => *count += 1,
-            None => left_out.push((kind, 1)),
-        }
-    }
 
     let page_refs: Vec<Ref> = page_ids.iter().map(|&(page, _)| page).collect();
     let tree = tree::write(&mut pdf, &mut next, list, &page_refs, &counts.mcids)?;
@@ -252,7 +231,7 @@ fn write_with(list: &DisplayList, blobs: &Blobs, partial: bool) -> Result<(Writt
     // ISO 32000-2 §7.5.5 requires an `/ID` of every PDF 2.0 file, and the oracle writes none: both entries are the first 16 bytes of a SHA-256 over the file as written up to the cross-reference table, so the identifier is a function of the list.
     let id = Sha256::digest(pdf.as_bytes())[..16].to_vec();
     pdf.set_file_id((id.clone(), id));
-    Ok((Written { bytes: pdf.finish(), records: Records { mcids: counts.mcids, pens: counts.pens, kern_adjustments: counts.kern_adjustments, actual_text_spans: counts.actual_text_spans, faces, images: counts.images, xobjects: images.xobjects.len(), paint, vector_resources, colour: colour.map(|(_, _, record)| record) } }, left_out))
+    Ok(Written { bytes: pdf.finish(), records: Records { mcids: counts.mcids, pens: counts.pens, kern_adjustments: counts.kern_adjustments, actual_text_spans: counts.actual_text_spans, faces, images: counts.images, xobjects: images.xobjects.len(), paint, vector_resources, colour: colour.map(|(_, _, record)| record) } })
 }
 
 /// A box of the list as pdf-writer's rectangle, whose reals are `f32`.

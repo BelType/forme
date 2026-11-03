@@ -4,7 +4,7 @@
 //! - **A line is one text object**: `BT … ET` per `lineIndex`, wrapped in `q`, the line's `cm` and its clips, and `Q`, when it has either; a vector item closes the open line before its geometry, as the oracle does, while an image, a rectangle and the print marks do not.
 //! - **A vector item** is [`crate::vectors`]'s, painted as an artifact when it sits in an artifact's marked content, its names recorded into the page's scope.
 //! - **A run is `Tf`, `rg`, `Tc`, `Tm` and one `TJ`**: each segment's glyphs as one hex string of CIDs, a space glyph where DOM whitespace separated two segments, and between them the number that moves the pen to where the browser put the next. The pen is tracked in the renderer's terms, the `/W` entry plus `Tc` per glyph, and every glyph whose shaped advance differs from its `/W` entry by more than [`KERN_EPSILON`] thousandths carries the difference as its own adjustment.
-//! - **An image** is `imageOperators`: `q`, its clip at the list's numbers with `W n`, the `cm` that puts the unit square on the painted rectangle, `/Im<n> Do`, `Q`; the page names each XObject it paints, and the use is recorded. A facsimile is stage 8's.
+//! - **An image** is `imageOperators`: `q`, its clip at the list's numbers with `W n`, the `cm` that puts the unit square on the painted rectangle, `/Im<n> Do`, `Q`; the page names each XObject it paints, and the use is recorded. A facsimile's form is drawn in its own units, so its `cm` is scaled down to the unit square first (`formSize`).
 //! - **`/ActualText`**: an occurrence of a glyph that stands for other text than the ToUnicode map gives it is wrapped in `/Span <</ActualText <FEFF…> >> BDC … EMC`, the array closed before it and opened after.
 //! - **The arithmetic is the oracle's**, operation for operation in its order, on doubles, rounded by [`round3`]; Rust neither reorders nor fuses floating-point operations, so the pen is the oracle's to the bit.
 
@@ -42,27 +42,25 @@ pub struct Counts {
     pub images: Vec<ImageUse>,
 }
 
-/// One page's content stream, uncompressed, the XObjects it names, and the item kinds it left out.
+/// One page's content stream, uncompressed, and the XObjects it names.
 pub struct PageContent {
     pub bytes: Vec<u8>,
     /// Each XObject the page paints, by its resource name, in the order of first use.
     pub xobjects: Vec<(String, Ref)>,
     /// The vector items' resources: shadings, patterns, graphics states and form and raster XObjects.
     pub scope: Scope,
-    pub left_out: Vec<&'static str>,
 }
 
 /// The page loop over every page: each page's stream, and the records.
 ///
 /// # Errors
-/// A colour-cluster item, which forme refuses by name (the plan's rulings); a content start naming no element, in the oracle's sentence; and, unless `partial`, every item kind this stage does not write.
-pub fn pages(list: &DisplayList, fonts: &[Embedded], images: &Images, mut colour: Option<&mut Colour>, vectors: &mut Vectors, partial: bool) -> Result<(Vec<PageContent>, Counts), Refusal> {
+/// A colour-cluster item, which forme refuses by name (the plan's rulings); a content start naming no element, in the oracle's sentence.
+pub fn pages(list: &DisplayList, fonts: &[Embedded], images: &Images, mut colour: Option<&mut Colour>, vectors: &mut Vectors) -> Result<(Vec<PageContent>, Counts), Refusal> {
     let mut counts = Counts::default();
     let mut out = Vec::new();
     for (p, page) in list.pages.iter().enumerate() {
         let mut c = Content::new();
         let mut mcids = Vec::new();
-        let mut left_out = Vec::new();
         let mut xobjects: Vec<(String, Ref)> = Vec::new();
         let mut scope = Scope::default();
         let mut open: Option<&TextItem> = None;
@@ -132,13 +130,12 @@ pub fn pages(list: &DisplayList, fonts: &[Embedded], images: &Images, mut colour
                 Item::Image(image) => match images.of_source.get(&(image.source.0 as u32)) {
                     Some(&at_x) => {
                         let x = &images.xobjects[at_x];
-                        image_operators(&mut c, image, &x.name);
+                        image_operators(&mut c, image, &x.name, (x.info.path == "form").then_some((x.info.width, x.info.height)));
                         if !xobjects.iter().any(|(name, _)| name == &x.name) {
                             xobjects.push((x.name.clone(), x.id));
                         }
                         counts.images.push(ImageUse { page: p, item: at, source: image.source.0 as u32, name: x.name.clone(), hash: x.hash.clone(), info: x.info.clone() });
                     }
-                    None if images.facsimiles.contains(&(image.source.0 as u32)) => left_out.push("facsimile"),
                     None => return Err(Refusal::at(format!("forme: the image at item {at} of page {} names source {}, which no XObject was made for", p + 1, crate::content::js_string(image.source.0)), p, at)),
                 },
                 // A rectangle and the marks do not close the open line, as in the oracle's loop (stage 3's finding, unruled).
@@ -154,12 +151,9 @@ pub fn pages(list: &DisplayList, fonts: &[Embedded], images: &Images, mut colour
                     None => return Err(Refusal::at("caster: print marks are stroked in the /All separation, which needs the colour options".into(), p, at)),
                 },
             }
-            if !partial && let Some(&kind) = left_out.last() {
-                return Err(Refusal::at(format!("forme: item {at} of page {} is a {kind} item, which this stage of forme does not write yet", p + 1), p, at));
-            }
         }
         counts.mcids.push(mcids);
-        out.push(PageContent { bytes: c.finish(), xobjects, scope, left_out });
+        out.push(PageContent { bytes: c.finish(), xobjects, scope });
     }
     Ok((out, counts))
 }
@@ -169,8 +163,8 @@ pub fn font_names(fonts: &[Embedded]) -> Vec<(String, Ref)> {
     fonts.iter().enumerate().map(|(i, e)| (format!("F{i}"), e.font)).collect()
 }
 
-/// `imageOperators`: `q`, the clip's path in page points as the list holds it with `W n`, the `cm` that puts the unit square on the painted rectangle, `Do`, `Q`.
-fn image_operators(c: &mut Content, image: &ImageItem, name: &str) {
+/// `imageOperators`: `q`, the clip's path in page points as the list holds it with `W n`, the `cm` that puts the unit square on the painted rectangle, `Do`, `Q`. A Form XObject of `form_size` points is drawn in its own units, so the matrix is `mul([1 / w, 0, 0, 1 / h, 0, 0], transform)`, operation for operation.
+fn image_operators(c: &mut Content, image: &ImageItem, name: &str, form_size: Option<(f64, f64)>) {
     c.op(&[], "q");
     if let Some(clip) = &image.clip {
         let n = |p: &[Num; 2]| [Operand::Num(p[0].0), Operand::Num(p[1].0)];
@@ -185,7 +179,15 @@ fn image_operators(c: &mut Content, image: &ImageItem, name: &str) {
         c.op(&[], "W");
         c.op(&[], "n");
     }
-    c.op(&image.transform.map(|n| Operand::Num(n.0)), "cm");
+    let t = image.transform.map(|n| n.0);
+    let cm = match form_size {
+        Some((w, h)) => {
+            let a = [1.0 / w, 0.0, 0.0, 1.0 / h, 0.0, 0.0];
+            [a[0] * t[0] + a[1] * t[2], a[0] * t[1] + a[1] * t[3], a[2] * t[0] + a[3] * t[2], a[2] * t[1] + a[3] * t[3], a[4] * t[0] + a[5] * t[2] + t[4], a[4] * t[1] + a[5] * t[3] + t[5]]
+        }
+        None => t,
+    };
+    c.op(&cm.map(Operand::Num), "cm");
     c.op(&[Operand::Name(name)], "Do");
     c.op(&[], "Q");
 }
