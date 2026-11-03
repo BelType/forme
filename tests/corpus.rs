@@ -176,12 +176,12 @@ fn the_wtpdf_declarations_are_written_with_the_pdfua2_claim_and_withdrawn_with_i
     let (mut list, blobs) = list_of("cast");
     let declared = |list: &DisplayList| {
         let text = String::from_utf8_lossy(&write(list, &blobs).unwrap().bytes).into_owned();
-        ["<pdfuaid:part>2</pdfuaid:part>", "<pdfd:conformsTo>http://pdfa.org/declarations/wtpdf#accessibility1.0</pdfd:conformsTo>", "<pdfd:conformsTo>http://pdfa.org/declarations/wtpdf#reuse1.0</pdfd:conformsTo>", "xmlns:pdfd=\"http://pdfa.org/declarations/\""].map(|s| text.contains(s))
+        ["<pdfuaid:part>2</pdfuaid:part>", "<pdfd:conformsTo>http://pdfa.org/declarations/wtpdf#accessibility1.0</pdfd:conformsTo>", "<pdfd:conformsTo>http://pdfa.org/declarations/wtpdf#reuse1.0</pdfd:conformsTo>", "<pdfd:conformsTo>http://pdfa.org/declarations/wtpdf/#accessibility1.0</pdfd:conformsTo>", "<pdfd:conformsTo>http://pdfa.org/declarations/wtpdf/#reuse1.0</pdfd:conformsTo>", "xmlns:pdfd=\"http://pdfa.org/declarations/\""].map(|s| text.contains(s))
     };
     assert_eq!(list.info.conformance, Conformance::Pdfua2);
-    assert_eq!(declared(&list), [true; 4], "claimed: the identification and both declarations");
+    assert_eq!(declared(&list), [true; 6], "claimed: the identification and both declarations, each in veraPDF's spelling and the text's");
     list.info.conformance = Conformance::Tagged;
-    assert_eq!(declared(&list), [false; 4], "withdrawn: none of them");
+    assert_eq!(declared(&list), [false; 6], "withdrawn: none of them");
 }
 
 #[test]
