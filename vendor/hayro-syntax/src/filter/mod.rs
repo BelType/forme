@@ -1,6 +1,7 @@
+// forme's copy of hayro-syntax 0.7.2: Flate is the one filter decoded; ASCIIHex, ASCII85, LZW and run-length are named and refused (NOTICE says what changed and why).
+
 //! Results from decoding filtered data streams.
 
-mod ascii_85;
 pub(crate) mod ascii_hex;
 #[cfg(feature = "images")]
 mod ccitt;
@@ -11,7 +12,6 @@ mod jbig2;
 #[cfg(feature = "images")]
 mod jpx;
 mod lzw_flate;
-mod run_length;
 
 use crate::object::Dict;
 use crate::object::Name;
@@ -87,18 +87,7 @@ impl Filter {
         #[cfg_attr(not(feature = "images"), allow(unused))] image_params: &ImageDecodeParams,
     ) -> Result<FilterResult<'static>, DecodeFailure> {
         let res = match self {
-            Self::AsciiHexDecode => ascii_hex::decode(data)
-                .map(FilterResult::from_data)
-                .ok_or(DecodeFailure::StreamDecode),
-            Self::Ascii85Decode => ascii_85::decode(data)
-                .map(FilterResult::from_data)
-                .ok_or(DecodeFailure::StreamDecode),
-            Self::RunLengthDecode => run_length::decode(data)
-                .map(FilterResult::from_data)
-                .ok_or(DecodeFailure::StreamDecode),
-            Self::LzwDecode => lzw_flate::lzw::decode(data, params)
-                .map(FilterResult::from_data)
-                .ok_or(DecodeFailure::StreamDecode),
+            // forme: ASCIIHex, ASCII85, run-length and LZW are not decoded; the catch-all below refuses them.
             Self::FlateDecode => lzw_flate::flate::decode(data, params)
                 .map(FilterResult::from_data)
                 .ok_or(DecodeFailure::StreamDecode),

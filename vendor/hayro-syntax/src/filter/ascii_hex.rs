@@ -1,9 +1,13 @@
+// forme's copy of hayro-syntax 0.7.2: `decode`, the filter's, is compiled for the tests alone, since forme decodes no ASCIIHex stream (NOTICE says what changed and why).
+
 // Keep in sync with `hayro-postscript/src/string/ascii_hex.rs`.
 
 use crate::trivia::is_white_space_character;
 use crate::util::ByteBuf;
+#[cfg(test)]
 use alloc::vec::Vec;
 
+#[cfg(test)]
 pub(crate) fn decode(data: &[u8]) -> Option<Vec<u8>> {
     decode_into(data)
 }

@@ -1,6 +1,8 @@
+// forme's copy of hayro-syntax 0.7.2: the LZW decoder is removed with its test and its `/EarlyChange` parameter (NOTICE says what changed and why).
+
 use crate::bit_reader::{BitChunk, BitChunks, BitReader, BitWriter, bit_mask};
 use crate::object::Dict;
-use crate::object::dict::keys::{BITS_PER_COMPONENT, COLORS, COLUMNS, EARLY_CHANGE, PREDICTOR};
+use crate::object::dict::keys::{BITS_PER_COMPONENT, COLORS, COLUMNS, PREDICTOR};
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -561,158 +563,12 @@ pub(crate) mod flate {
     }
 }
 
-pub(crate) mod lzw {
-    use crate::bit_reader::BitReader;
-    use crate::filter::lzw_flate::{PredictorParams, apply_predictor};
-    use crate::object::Dict;
-    use alloc::vec;
-    use alloc::vec::Vec;
-
-    /// Decode a LZW-encoded stream.
-    pub(crate) fn decode(data: &[u8], params: &Dict<'_>) -> Option<Vec<u8>> {
-        let params = PredictorParams::from_params(params);
-
-        let decoded = decode_impl(data, params.early_change)?;
-
-        apply_predictor(decoded, &params)
-    }
-
-    const CLEAR_TABLE: usize = 256;
-    const EOD: usize = 257;
-    const MAX_ENTRIES: usize = 4096;
-    const INITIAL_SIZE: u16 = 258;
-
-    fn decode_impl(data: &[u8], early_change: bool) -> Option<Vec<u8>> {
-        let mut table = Table::new(early_change);
-        let mut bit_size = table.code_length();
-        let mut reader = BitReader::new(data);
-        let mut decoded = vec![];
-        let mut prev = None;
-
-        loop {
-            let next = match reader.read(bit_size) {
-                Some(code) => code as usize,
-                None => {
-                    warn!("premature EOF in LZW stream, EOD code missing");
-                    return Some(decoded);
-                }
-            };
-
-            match next {
-                CLEAR_TABLE => {
-                    table.clear();
-                    prev = None;
-                    bit_size = table.code_length();
-                }
-                EOD => return Some(decoded),
-                new => {
-                    if new > table.size() {
-                        warn!("invalid LZW code: {} (table size: {})", new, table.size());
-                        return None;
-                    }
-
-                    if new < table.size() {
-                        let entry = table.get(new)?;
-                        let first_byte = entry[0];
-                        decoded.extend_from_slice(entry);
-
-                        if let Some(prev_code) = prev {
-                            table.register(prev_code, first_byte);
-                        }
-                    } else if new == table.size() && prev.is_some() {
-                        let prev_code = prev.unwrap();
-                        let prev_entry = table.get(prev_code)?;
-                        let first_byte = prev_entry[0];
-
-                        let new_entry = table.register(prev_code, first_byte)?;
-                        decoded.extend_from_slice(new_entry);
-                    } else {
-                        warn!("LZW decode error: code {new} not found and prev is None");
-                        return None;
-                    }
-
-                    bit_size = table.code_length();
-                    prev = Some(new);
-                }
-            }
-        }
-    }
-
-    struct Table {
-        early_change: bool,
-        entries: Vec<Option<Vec<u8>>>,
-    }
-
-    impl Table {
-        fn new(early_change: bool) -> Self {
-            let mut entries: Vec<_> = (0..=255).map(|b| Some(vec![b])).collect();
-
-            // Clear table and EOD don't have any data.
-            entries.push(None); // 256 = CLEAR_TABLE
-            entries.push(None); // 257 = EOD
-
-            Self {
-                early_change,
-                entries,
-            }
-        }
-
-        fn push(&mut self, entry: Vec<u8>) -> Option<&[u8]> {
-            if self.entries.len() >= MAX_ENTRIES {
-                None
-            } else {
-                self.entries.push(Some(entry));
-                self.entries.last()?.as_ref().map(|v| &**v)
-            }
-        }
-
-        fn register(&mut self, prev: usize, new_byte: u8) -> Option<&[u8]> {
-            let prev_entry = self.get(prev)?;
-
-            let mut new_entry = Vec::with_capacity(prev_entry.len() + 1);
-            new_entry.extend(prev_entry);
-            new_entry.push(new_byte);
-            self.push(new_entry)
-        }
-
-        fn get(&self, index: usize) -> Option<&[u8]> {
-            self.entries.get(index)?.as_ref().map(|v| &**v)
-        }
-
-        fn clear(&mut self) {
-            self.entries.truncate(INITIAL_SIZE as usize);
-        }
-
-        fn size(&self) -> usize {
-            self.entries.len()
-        }
-
-        fn code_length(&self) -> u8 {
-            const TEN: usize = 512;
-            const ELEVEN: usize = 1024;
-            const TWELVE: usize = 2048;
-
-            let adjusted = self.entries.len() + (if self.early_change { 1 } else { 0 });
-
-            if adjusted >= TWELVE {
-                12
-            } else if adjusted >= ELEVEN {
-                11
-            } else if adjusted >= TEN {
-                10
-            } else {
-                9
-            }
-        }
-    }
-}
 
 struct PredictorParams {
     predictor: u8,
     colors: u8,
     bits_per_component: u8,
     columns: usize,
-    early_change: bool,
 }
 
 impl PredictorParams {
@@ -732,7 +588,6 @@ impl Default for PredictorParams {
             colors: 1,
             bits_per_component: 8,
             columns: 1,
-            early_change: true,
         }
     }
 }
@@ -744,7 +599,6 @@ impl PredictorParams {
             colors: dict.get(COLORS).unwrap_or(1),
             bits_per_component: dict.get(BITS_PER_COMPONENT).unwrap_or(8),
             columns: dict.get(COLUMNS).unwrap_or(1),
-            early_change: dict.get::<u8>(EARLY_CHANGE).map(|e| e != 0).unwrap_or(true),
         }
     }
 }
@@ -956,16 +810,8 @@ impl Predictor for Paeth {
 #[cfg(test)]
 #[rustfmt::skip]
 mod tests {
-    use crate::filter::lzw_flate::{PredictorParams, apply_predictor, flate, lzw};
+    use crate::filter::lzw_flate::{PredictorParams, apply_predictor, flate};
     use crate::object::Dict;
-
-    #[test]
-    fn decode_lzw() {
-        let input = [0x80, 0x0B, 0x60, 0x50, 0x22, 0x0C, 0x0C, 0x85, 0x01];
-        let decoded = lzw::decode(&input, &Dict::default()).unwrap();
-
-        assert_eq!(decoded, vec![45, 45, 45, 45, 45, 65, 45, 45, 45, 66]);
-    }
 
     #[test]
     fn decode_flate_zlib() {
@@ -1002,7 +848,6 @@ mod tests {
             colors: 3,
             bits_per_component: 8,
             columns: 3,
-            early_change: false,
         };
 
         let expected = predictor_expected();
