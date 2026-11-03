@@ -307,3 +307,33 @@ fn every_painted_image_is_the_lists_bytes_in_the_file() {
     }
     assert_eq!(seen, 12, "the images the corpus paints, but the facsimiles");
 }
+
+/// The colour story on roads, read back by hayro-syntax: the output intent on the catalog with its CMYK profile, `/DefaultRGB` and the `/All` separation on every page, the black-text runs counted; and the oracle's refusals of a profile that is not CMYK, of print marks with no colour story, and of one colourant with two alternates. The record and the content against the oracle's are Caster's `npm run identity -- compare`.
+#[test]
+fn the_colour_story_is_written_and_its_refusals_are_the_oracles() {
+    use hayro_syntax::object::{Array, Dict, Name, Stream};
+    let (list, blobs) = list_of("roads");
+    let written = write_partial(&list, &blobs).unwrap().0;
+    let record = written.records.colour.as_ref().expect("a colour record");
+    assert!(record.black_text_runs > 0 && record.color_spaces.iter().any(|s| s.colorant.as_deref() == Some("All")));
+    let pdf = hayro_syntax::Pdf::new(written.bytes).unwrap();
+    let catalog = pdf.xref().get::<Dict>(pdf.xref().root_id()).unwrap();
+    let intent: Dict = catalog.get::<Array>(b"OutputIntents").unwrap().iter::<Dict>().next().unwrap();
+    assert_eq!(intent.get::<Name>(b"S").as_deref(), Some(b"GTS_PDFX".as_slice()));
+    assert_eq!(&*intent.get::<Stream>(b"DestOutputProfile").unwrap().decoded().unwrap(), blobs[&list.writing.colour.as_ref().unwrap().profiles.cmyk].as_slice());
+    for page in pdf.pages().iter() {
+        let spaces = page.raw().get::<Dict>(b"Resources").and_then(|r| r.get::<Dict>(b"ColorSpace")).unwrap();
+        assert!(spaces.get::<Array>(b"DefaultRGB").is_some() && record.color_spaces[1..].iter().all(|s| spaces.get::<Array>(s.name.as_bytes()).is_some()));
+    }
+
+    let mut rgb = list.clone();
+    rgb.writing.colour.as_mut().unwrap().profiles.cmyk = rgb.writing.colour.as_ref().unwrap().profiles.srgb.clone();
+    assert_eq!(write_partial(&rgb, &blobs).unwrap_err().message, "colorResources: the output profile is \"RGB \", not CMYK");
+    let mut bare = list.clone();
+    bare.writing.colour = None;
+    assert_eq!(write_partial(&bare, &blobs).unwrap_err().message, "caster: print marks are stroked in the /All separation, which needs the colour options");
+    let mut twice = list.clone();
+    let spot = twice.pages.iter_mut().flat_map(|p| &mut p.items).find_map(|i| match i { Item::Text(t) => match &mut t.fill.ink { Some(list::Ink::Spot(s)) => Some(s), _ => None }, _ => None }).unwrap();
+    spot.spot = "All".into();
+    assert_eq!(write_partial(&twice, &blobs).unwrap_err().message, "colorResources: the spot \"All\" is declared with two alternates, device-cmyk(0 1 0.65 0.15) and device-cmyk(1 1 1 1)");
+}
