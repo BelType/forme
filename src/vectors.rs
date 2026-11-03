@@ -1,7 +1,7 @@
 //! The vector items, ported from Caster's `src/vectors/vectorEmit.ts`, `shading.ts` and `transparency.ts`: measured geometry in, content-stream operators out.
 //!
 //! - **A path** is its graphics state, then a flat fill as `f` or `f*`, a flat stroke as `w J j M d` and `S`, both as `B` or `B*` (or, with a stroke alpha below one, the path filled and then stroked, since `B` is a knockout group), and `paint-order: stroke` as the path twice, stroked and then filled. A gradient fill is `q`, the path, `W n`, the gradient's `cm` and `sh`, `Q`; its alpha stops are a `/DeviceGray` shading in a transparency group that an `/SMask` reads. A gradient stroke is `/Pattern CS /Pn SCN` over a type 2 pattern whose `/Matrix` is the gradient's.
-//! - **A shading** is `/ShadingType 2` or `3` over a `/FunctionType 3` stitching function of type 2 segments, its `/Domain` the stops' own range, a hard stop nudged by a millionth of the domain; colours at [`round4`], the domain and bounds at [`round6`]; one object per distinct gradient, `Sh0`, `Sh1`, … in first-use order, and `P0`, `P1`, … for patterns.
+//! - **A shading** is `/ShadingType 2` or `3` over a `/FunctionType 3` stitching function of type 2 segments, its `/Domain` `[0 1]`, the gradient line's own parameter, and the function's domain the stops' own range, which pads before the first stop and after the last; a hard stop nudged by a millionth of the function's domain; colours at [`round4`], the domain and bounds at [`round6`]; one object per distinct gradient, `Sh0`, `Sh1`, … in first-use order, and `P0`, `P1`, … for patterns.
 //! - **A graphics state** is one `/ExtGState` per distinct `/ca`, `/CA`, `/BM` and `/SMask`, `GT0`, `GT1`, … so as not to meet the colour story's `GS<n>`, with `/SMask /None` where it sets alpha or a blend but no mask.
 //! - **An isolated group and a soft mask** are transparency-group forms, `Fm0`, `Fm1`, … each its own; **a form item** is a plain form written once per key, `Fx0`, `Fx1`, … and drawn with its matrix wherever it is named; **a raster fallback** is the image XObject the images made, placed by its `cm`.
 //! - **Every name is recorded into the scope of the stream that uses it**, a page's or a form's own `/Resources`, and every node painted is a row of the `paint` record, in painting order; the counts are `vectorResources`.
@@ -545,11 +545,10 @@ impl<'a> Vectors<'a> {
                 bounds.push(round6(offsets[i]));
             }
         }
-        let domain = [round6(t0), round6(t1)];
         let function = self.next.bump();
         let mut f = self.pdf.indirect(function).dict();
         f.pair(Name(b"FunctionType"), 3);
-        f.insert(Name(b"Domain")).array().items(f32s(domain));
+        f.insert(Name(b"Domain")).array().items(f32s([round6(t0), round6(t1)]));
         let mut functions = f.insert(Name(b"Functions")).array();
         for (from, to) in &segments {
             let mut s = functions.push().dict();
@@ -567,7 +566,9 @@ impl<'a> Vectors<'a> {
         let mut d = self.pdf.indirect(id).dict();
         d.pair(Name(b"ShadingType"), shading_type(g)).pair(Name(b"ColorSpace"), Name(space.as_bytes()));
         d.insert(Name(b"Coords")).array().items(f32s(g.coords.iter().map(|c| round4(c.0))));
-        d.insert(Name(b"Domain")).array().items(f32s(domain));
+        // A shading maps the start of its axis to the first value of its `/Domain` (ISO 32000-2, 8.7.4.5.3), so the domain is the line's own parameter and a stop at 40% stays at 40% of the line; the stops' range drew it at the start.
+        let domain = [0.0, 1.0];
+        d.insert(Name(b"Domain")).array().items([0, 1]);
         d.insert(Name(b"Extend")).array().items(g.extend);
         d.pair(Name(b"Function"), function);
         d.finish();
