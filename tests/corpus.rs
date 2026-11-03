@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use forme::list::{self, DisplayList, Item, StructChild, TagEndItem, TagStart};
+use forme::list::{self, Conformance, DisplayList, Item, StructChild, TagEndItem, TagStart};
 use forme::{Refusal, read_blobs, validate::validate, write};
 use serde_json::Value;
 
@@ -169,6 +169,19 @@ fn the_writer_refuses_a_blob_that_is_not_its_name_and_a_date_that_is_not_an_inst
     assert!(text.contains("/CreationDate (D:20261102102030Z)") && text.contains("/ModDate (D:20261102102030Z)"), "both dates, at whole seconds");
     list.info.created = "2026-11-02 10:20".into();
     assert_eq!(write(&list, &blobs).unwrap_err().message, "caster: the display list's info.created is \"2026-11-02 10:20\", which is not an ISO 8601 instant in UTC (YYYY-MM-DDTHH:mm:ssZ)");
+}
+
+#[test]
+fn the_wtpdf_declarations_are_written_with_the_pdfua2_claim_and_withdrawn_with_it() {
+    let (mut list, blobs) = list_of("cast");
+    let declared = |list: &DisplayList| {
+        let text = String::from_utf8_lossy(&write(list, &blobs).unwrap().bytes).into_owned();
+        ["<pdfuaid:part>2</pdfuaid:part>", "<pdfd:conformsTo>http://pdfa.org/declarations/wtpdf#accessibility1.0</pdfd:conformsTo>", "<pdfd:conformsTo>http://pdfa.org/declarations/wtpdf#reuse1.0</pdfd:conformsTo>", "xmlns:pdfd=\"http://pdfa.org/declarations/\""].map(|s| text.contains(s))
+    };
+    assert_eq!(list.info.conformance, Conformance::Pdfua2);
+    assert_eq!(declared(&list), [true; 4], "claimed: the identification and both declarations");
+    list.info.conformance = Conformance::Tagged;
+    assert_eq!(declared(&list), [false; 4], "withdrawn: none of them");
 }
 
 #[test]
