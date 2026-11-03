@@ -74,11 +74,7 @@ fn run(args: &[String]) -> Result<(), Failure> {
     let written = if command.partial {
         let (written, left_out) = forme::write_partial(&list, &blobs).map_err(|r| Failure::Refused(r.message))?;
         for (kind, count) in left_out {
-            if kind == "colour story" {
-                eprintln!("forme: left out the colour story");
-            } else {
-                eprintln!("forme: left out {count} {kind} item{}", if count == 1 { "" } else { "s" });
-            }
+            eprintln!("forme: left out {count} {kind} item{}", if count == 1 { "" } else { "s" });
         }
         written
     } else {

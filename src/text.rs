@@ -11,10 +11,11 @@ use pdf_writer::Ref;
 use serde::Serialize;
 
 use crate::Refusal;
+use crate::colour::{Colour, PaintOps};
 use crate::content::{Content, Operand, round3};
 use crate::fonts::{Embedded, segments};
 use crate::images::{ImageUse, Images};
-use crate::list::{ArtifactType, ClipPath, DisplayList, FillRule, ImageItem, Item, Matrix, Num, PathSegment, TagStart, TextItem};
+use crate::list::{ArtifactType, ClipPath, DisplayList, FillRule, ImageItem, Item, Matrix, Num, PathSegment, RectItem, TagStart, TextItem};
 
 /// The largest gap, in thousandths of an em, between the shaped advance and the `/W` entry that is rounding rather than a kern, the oracle's `KERN_EPSILON`.
 pub const KERN_EPSILON: f64 = 2.0;
@@ -51,7 +52,7 @@ pub struct PageContent {
 ///
 /// # Errors
 /// A colour-cluster item, which forme refuses by name (the plan's rulings); a content start naming no element, in the oracle's sentence; and, unless `partial`, every item kind this stage does not write.
-pub fn pages(list: &DisplayList, fonts: &[Embedded], images: &Images, partial: bool) -> Result<(Vec<PageContent>, Counts), Refusal> {
+pub fn pages(list: &DisplayList, fonts: &[Embedded], images: &Images, mut colour: Option<&mut Colour>, partial: bool) -> Result<(Vec<PageContent>, Counts), Refusal> {
     let mut counts = Counts::default();
     let mut out = Vec::new();
     for (p, page) in list.pages.iter().enumerate() {
@@ -98,7 +99,8 @@ pub fn pages(list: &DisplayList, fonts: &[Embedded], images: &Images, partial: b
                     }
                     let font = list.resources.fonts.iter().position(|f| f.key == text.font).ok_or_else(|| Refusal::at(format!("caster: a text item names the font {}, and the display list holds no instance under that key", text.font), p, at))?;
                     let upem = list.resources.fonts[font].upem.map_or(f64::NAN, |u| u.0);
-                    let adjustments = run(&mut c, text, &fonts[font], &format!("F{font}"), upem, &mut counts);
+                    let ops = colour.as_deref_mut().map(|k| k.run(text, p, at)).transpose()?;
+                    let adjustments = run(&mut c, text, &fonts[font], &format!("F{font}"), upem, ops.as_ref(), &mut counts);
                     counts.pens.push(Pen { page: p, item: at, adjustments });
                 }
                 Item::Raster(_) => return Err(Refusal::at(format!("forme: item {at} of page {} is a colour-cluster raster, which forme does not write; the colour-cluster road is dormant in print()", p + 1), p, at)),
@@ -122,7 +124,18 @@ pub fn pages(list: &DisplayList, fonts: &[Embedded], images: &Images, partial: b
                     None if images.facsimiles.contains(&(image.source.0 as u32)) => left_out.push("facsimile"),
                     None => return Err(Refusal::at(format!("forme: the image at item {at} of page {} names source {}, which no XObject was made for", p + 1, crate::content::js_string(image.source.0)), p, at)),
                 },
-                Item::Rect(_) | Item::Marks(_) => left_out.push(item.kind()),
+                // A rectangle and the marks do not close the open line, as in the oracle's loop (stage 3's finding, unruled).
+                Item::Rect(rect) => {
+                    let ops = match colour.as_deref_mut() {
+                        Some(k) => k.rect(rect)?,
+                        None => None,
+                    };
+                    rect_operators(&mut c, rect, ops.as_ref());
+                }
+                Item::Marks(marks) => match colour.as_deref_mut() {
+                    Some(k) => k.marks(&mut c, marks)?,
+                    None => return Err(Refusal::at("caster: print marks are stroked in the /All separation, which needs the colour options".into(), p, at)),
+                },
             }
             if !partial && let Some(&kind) = left_out.last() {
                 return Err(Refusal::at(format!("forme: item {at} of page {} is a {kind} item, which this stage of forme does not write yet", p + 1), p, at));
@@ -157,6 +170,25 @@ fn image_operators(c: &mut Content, image: &ImageItem, name: &str) {
     }
     c.op(&image.transform.map(|n| Operand::Num(n.0)), "cm");
     c.op(&[Operand::Name(name)], "Do");
+    c.op(&[], "Q");
+}
+
+/// `rectOperators`: `q`, the overprint state, the paint (`rg` at thousandths for the ground or with no colour story), `re f`, the reset, `Q`.
+fn rect_operators(c: &mut Content, rect: &RectItem, ops: Option<&PaintOps>) {
+    c.op(&[], "q");
+    match ops {
+        Some(ops) => {
+            ops.write_setup(c);
+            ops.write_paint(c);
+        }
+        None => {
+            c.op(&rect.fill.rgb.map(|v| Operand::Num(round3(v.0))), "rg");
+        }
+    }
+    c.op(&rect.rect.map(|n| Operand::Num(n.0)), "re").op(&[], "f");
+    if let Some(ops) = ops {
+        ops.write_reset(c);
+    }
     c.op(&[], "Q");
 }
 
@@ -201,7 +233,7 @@ enum Shown {
 }
 
 /// `emitRun`: one run's state operators and its `TJ`, appended to the page; the pen adjustment written before each segment, the writer's record of the item.
-fn run(c: &mut Content, item: &TextItem, font: &Embedded, name: &str, upem: f64, counts: &mut Counts) -> Vec<Option<Num>> {
+fn run(c: &mut Content, item: &TextItem, font: &Embedded, name: &str, upem: f64, colour: Option<&PaintOps>, counts: &mut Counts) -> Vec<Option<Num>> {
     let size = item.size.0;
     let tc = item.letter_spacing.0;
     let space = item.space.0 as u16;
@@ -209,8 +241,16 @@ fn run(c: &mut Content, item: &TextItem, font: &Embedded, name: &str, upem: f64,
     let cids = |gids: &[u16]| -> Vec<u8> { gids.iter().flat_map(|g| font.cids.get(g).copied().unwrap_or(0).to_be_bytes()).collect() };
     let space_adv = (width(space) / 1000.0) * size;
     let start = round3(item.segments.x[0].0 - if item.leading_space { space_adv + tc } else { 0.0 });
+    if let Some(ops) = colour {
+        ops.write_setup(c);
+    }
     c.op(&[Operand::Name(name), Operand::Num(round3(size))], "Tf");
-    c.op(&item.fill.rgb.map(|v| Operand::Num(round3(v.0))), "rg");
+    match colour {
+        Some(ops) => ops.write_paint(c),
+        None => {
+            c.op(&item.fill.rgb.map(|v| Operand::Num(round3(v.0))), "rg");
+        }
+    }
     c.op(&[Operand::Num(round3(tc))], "Tc");
     c.op(&[Operand::Num(1.0), Operand::Num(0.0), Operand::Num(0.0), Operand::Num(1.0), Operand::Num(start), Operand::Num(item.baseline.0)], "Tm");
 
@@ -286,5 +326,8 @@ fn run(c: &mut Content, item: &TextItem, font: &Embedded, name: &str, upem: f64,
         adjustments.push(emitted);
     }
     flush(c, &mut shown);
+    if let Some(ops) = colour {
+        ops.write_reset(c);
+    }
     adjustments
 }

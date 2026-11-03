@@ -218,9 +218,9 @@ fn the_validator_refuses_the_four_other_broken_trees_with_the_oracles_sentences(
     }, "caster: structure element 1 (Document/H1[0]) lists item 3 of page 1, which opens content for element 2", Some([0.0, 3.0]));
 }
 
-/// The page loop's records against the list they come from: one pen per text item with one adjustment per segment, the first none; the MCIDs of each page its content starts in item order; the two whole lists (text and tags alone) written by `write`; the colour story refused by name. The records against the oracle's are Caster's `npm run identity -- compare`.
+/// The page loop's records against the list they come from: one pen per text item with one adjustment per segment, the first none; the MCIDs of each page its content starts in item order; every list with nothing left out written by `write` as by `write_partial`. The records against the oracle's are Caster's `npm run identity -- compare`.
 #[test]
-fn the_page_loop_records_every_run_and_content_start_and_refuses_a_colour_story_by_name() {
+fn the_page_loop_records_every_run_and_content_start() {
     for (name, _) in corpus() {
         let (list, blobs) = list_of(&name);
         let records = write_partial(&list, &blobs).unwrap_or_else(|r| panic!("{name}: {r}")).0.records;
@@ -237,11 +237,9 @@ fn the_page_loop_records_every_run_and_content_start_and_refuses_a_colour_story_
         let facsimile = |source: &list::Num| list.resources.images.get(&(source.0 as u32)).is_some_and(|s| s.kind == list::ImageKind::Facsimile);
         let whole = list.pages.iter().flat_map(|p| &p.items).all(|i| match i {
             Item::Image(image) => !facsimile(&image.source),
-            i => matches!(i, Item::Text(_) | Item::TagStart(_) | Item::TagEnd(_) | Item::Link(_)),
+            i => matches!(i, Item::Text(_) | Item::TagStart(_) | Item::TagEnd(_) | Item::Link(_) | Item::Rect(_) | Item::Marks(_)),
         });
-        if list.writing.colour.is_some() {
-            assert_eq!(write(&list, &blobs).unwrap_err().message, "forme: the display list has a colour story (writing.colour), which this stage of forme does not write yet");
-        } else if whole {
+        if whole {
             assert_eq!(write(&list, &blobs).unwrap().bytes, write_partial(&list, &blobs).unwrap().0.bytes, "{name}: nothing left out");
         }
     }

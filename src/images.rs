@@ -245,7 +245,7 @@ fn key(source: &Source, interpolate: bool) -> String {
 }
 
 /// An `/ICCBased` profile stream, Flate-compressed, with `/N`.
-fn icc_stream(pdf: &mut Pdf, next: &mut Ref, profile: &[u8], components: i32) -> Ref {
+pub(crate) fn icc_stream(pdf: &mut Pdf, next: &mut Ref, profile: &[u8], components: i32) -> Ref {
     let id = next.bump();
     pdf.icc_profile(id, &deflate(profile)).n(components).filter(Filter::FlateDecode);
     id
