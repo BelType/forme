@@ -114,12 +114,15 @@ pub fn write(list: &DisplayList, blobs: &Blobs) -> Result<Written, Refusal> {
     let font_names = text::font_names(&embedded);
     let mut vectors = vectors::Vectors::new(&mut pdf, &mut next, list, &images);
     let (contents, counts) = text::pages(list, &embedded, &images, colour.as_mut(), &mut vectors)?;
+    // A page holding a blend no group isolates is the blend's group, in the document's sRGB profile (Egildo's ruling 15a), as Chromium's page is an RGB stacking context.
+    let page_groups: Vec<Option<Ref>> = list.pages.iter().map(|page| if page.items.iter().any(|item| vectors::node_of(item).is_some_and(vectors::holds_open_blend)) { vectors.blending_space() } else { None }).collect();
+    let srgb = vectors.srgb;
     let (paint, vector_resources) = (format!("[{}]", vectors.paint.join(",")), vectors.counts());
 
     let page_refs: Vec<Ref> = page_ids.iter().map(|&(page, _)| page).collect();
     let tree = tree::write(&mut pdf, &mut next, list, &page_refs, &counts.mcids)?;
     // The colour objects go on last, as the oracle's `finish`: a name is allocated on first use, so the set is known only once every page is written.
-    let colour = colour.map(|k| k.finish(&mut pdf, &mut next));
+    let colour = colour.map(|k| k.finish(&mut pdf, &mut next, srgb));
 
     let mut catalog = pdf.catalog(catalog_id);
     catalog.pages(pages_id);
@@ -144,6 +147,9 @@ pub fn write(list: &DisplayList, blobs: &Blobs) -> Result<Written, Refusal> {
     for (index, ((page, &(page_id, content_id)), content)) in list.pages.iter().zip(&page_ids).zip(&contents).enumerate() {
         let mut writer = pdf.page(page_id);
         writer.parent(pages_id).media_box(rect(&page.boxes.media));
+        if let Some(space) = page_groups[index] {
+            writer.insert(Name(b"Group")).dict().pair(Name(b"Type"), Name(b"Group")).pair(Name(b"S"), Name(b"Transparency")).insert(Name(b"CS")).array().item(Name(b"ICCBased")).item(space);
+        }
         if let Some(trim) = &page.boxes.trim {
             writer.trim_box(rect(trim));
         }

@@ -12,7 +12,7 @@ use crate::Refusal;
 use crate::json::{array, n, object, opt_st, st};
 use crate::content::{Content, Operand, js_round, js_string, round3};
 use crate::images::Images;
-use crate::list::{BoxPt, ClipPath, DisplayList, FillRule, FormItem, Gradient, GradientType, GroupItem, Matrix, MaskType, Num, Paint, PathItem, PathSegment, RasterFallbackItem, ShadingSpace, SoftMask, Spread, Stroke, VectorItem, VectorOrigin};
+use crate::list::{BoxPt, ClipPath, DisplayList, FillRule, FormItem, Gradient, GradientType, GroupItem, Item, Matrix, MaskType, Num, Paint, PathItem, PathSegment, RasterFallbackItem, ShadingSpace, SoftMask, Spread, Stroke, VectorItem, VectorOrigin};
 
 /// `Math.round(n * 10000) / 10000`, the shadings' and graphics states' rounding.
 pub fn round4(n: f64) -> f64 {
@@ -47,6 +47,25 @@ pub enum Node<'a> {
     Group(&'a GroupItem),
     Form(&'a FormItem),
     Raster(&'a RasterFallbackItem),
+}
+
+/// A page item as a vector node, or nothing for one that is not a vector item.
+pub fn node_of(item: &Item) -> Option<Node<'_>> {
+    Some(match item {
+        Item::Group(x) => Node::Group(x),
+        Item::Path(x) => Node::Path(x),
+        Item::Form(x) => Node::Form(x),
+        Item::RasterFallback(x) => Node::Raster(x),
+        _ => return None,
+    })
+}
+
+/// `holdsOpenBlend`: whether a node's blend mode reaches past it to a backdrop outside, its own or one under a group that is no transparency group. A blend composites in its parent's blending space (ISO 32000-2, 11.3.4) and a non-isolated group has none of its own (11.7.2), so the isolated group or the page holding such a node names the sRGB profile (Egildo's ruling 15a).
+pub fn holds_open_blend(node: Node) -> bool {
+    if node.painted().blend.is_some() {
+        return true;
+    }
+    matches!(node, Node::Group(g) if g.isolated != Some(true) && g.items.iter().any(|i| holds_open_blend(i.into())))
 }
 
 impl<'a> From<&'a VectorItem> for Node<'a> {
@@ -116,6 +135,10 @@ pub struct Vectors<'a> {
     states: Vec<(String, Ref)>,
     forms: usize,
     shared: Vec<(String, String, Ref)>,
+    /// Whether the document has a colour story, whose sRGB profile a blend's group names as its blending space.
+    has_colour: bool,
+    /// The sRGB profile's stream, allocated when a group or a page first names it and written by the colour story's `finish` (Egildo's ruling 15a).
+    pub srgb: Option<Ref>,
     /// One row per node painted, in painting order, each a JSON object: Caster's `ReportPaint`.
     pub paint: Vec<String>,
 }
@@ -202,7 +225,16 @@ fn join(xs: impl IntoIterator<Item = f64>, sep: &str) -> String {
 
 impl<'a> Vectors<'a> {
     pub fn new(pdf: &'a mut Pdf, next: &'a mut Ref, list: &'a DisplayList, images: &'a Images) -> Self {
-        Self { pdf, next, list, images, shadings: Vec::new(), patterns: Vec::new(), states: Vec::new(), forms: 0, shared: Vec::new(), paint: Vec::new() }
+        let has_colour = list.writing.colour.is_some();
+        Self { pdf, next, list, images, shadings: Vec::new(), patterns: Vec::new(), states: Vec::new(), forms: 0, shared: Vec::new(), has_colour, srgb: None, paint: Vec::new() }
+    }
+
+    /// The document's sRGB profile as the blending space of a group that holds a blend, allocated on first use; nothing with no colour story, where `/DeviceRGB` stands.
+    pub fn blending_space(&mut self) -> Option<Ref> {
+        if !self.has_colour {
+            return None;
+        }
+        Some(*self.srgb.get_or_insert_with(|| self.next.bump()))
     }
 
     /// The `vectorResources` record, as JSON.
@@ -262,7 +294,8 @@ impl<'a> Vectors<'a> {
                     for child in &g.items {
                         self.emit(&mut content, child.into(), &mut inner, info)?;
                     }
-                    let (name, id) = self.transparency_form(&g.bbox, content, &inner);
+                    let space = if g.items.iter().any(|i| holds_open_blend(i.into())) { self.blending_space() } else { None };
+                    let (name, id) = self.transparency_form(&g.bbox, content, &inner, space);
                     put(&mut scope.xobjects, &name, id);
                     self.state_for(c, &p, scope, info, with_backdrop);
                     c.op(&[Operand::Name(&name)], "Do");
@@ -289,7 +322,7 @@ impl<'a> Vectors<'a> {
                             self.emit(&mut content, child.into(), &mut inner, info)?;
                         }
                         let name = format!("Fx{}", self.shared.len());
-                        let id = self.form_stream(&definition.bbox, content, &inner, false);
+                        let id = self.form_stream(&definition.bbox, content, &inner, false, None);
                         self.shared.push((f.form.clone(), name.clone(), id));
                         (name, id, false)
                     }
@@ -451,7 +484,7 @@ impl<'a> Vectors<'a> {
         for child in &mask.items {
             self.emit(&mut content, child.into(), &mut inner, info)?;
         }
-        let (name, id) = self.transparency_form(&mask.bbox, content, &inner);
+        let (name, id) = self.transparency_form(&mask.bbox, content, &inner, None);
         let reason = opt_st(p.origin.mask_reason.as_deref());
         self.row(&p.origin.dom_path, info, "smask", format!("{}:mask", p.origin.label), &[("geometry", nums(&mask.bbox, round3)), ("reason", reason), ("form", st(&name))]);
         Ok(Some(id))
@@ -468,20 +501,20 @@ impl<'a> Vectors<'a> {
         clip_operators(&mut content, path, if even { FillRule::Evenodd } else { FillRule::Nonzero });
         content.op(&ops_num(&g.matrix), "cm").op(&[Operand::Name(&alpha)], "sh").op(&[], "Q");
         let bbox_nums = bbox.map(Num);
-        let (name, id) = self.transparency_form(&bbox_nums, content, &inner);
+        let (name, id) = self.transparency_form(&bbox_nums, content, &inner, None);
         self.row(&origin.dom_path, info, "smask", format!("{}:alpha-stops", origin.label), &[("geometry", r3(&bbox)), ("reason", st("the gradient has stops with alpha below one")), ("form", st(&name)), ("params", shading_record(g, &alpha, domain, None))]);
         Ok(id)
     }
 
     /// A transparency-group form, `/I true /K false`, each its own.
-    fn transparency_form(&mut self, bbox: &BoxPt, content: Content, scope: &Scope) -> (String, Ref) {
+    fn transparency_form(&mut self, bbox: &BoxPt, content: Content, scope: &Scope, space: Option<Ref>) -> (String, Ref) {
         let name = format!("Fm{}", self.forms);
         self.forms += 1;
-        (name, self.form_stream(bbox, content, scope, true))
+        (name, self.form_stream(bbox, content, scope, true, space))
     }
 
     /// A form XObject: its content deflated, its `/BBox` at four decimals, a transparency group when `group`, and its own `/Resources`.
-    fn form_stream(&mut self, bbox: &BoxPt, content: Content, scope: &Scope, group: bool) -> Ref {
+    fn form_stream(&mut self, bbox: &BoxPt, content: Content, scope: &Scope, group: bool, space: Option<Ref>) -> Ref {
         let id = self.next.bump();
         let bytes = crate::fonts::deflate(&content.finish());
         let mut s = self.pdf.stream(id, &bytes);
@@ -489,7 +522,17 @@ impl<'a> Vectors<'a> {
         s.pair(Name(b"Type"), Name(b"XObject")).pair(Name(b"Subtype"), Name(b"Form")).pair(Name(b"FormType"), 1);
         s.insert(Name(b"BBox")).array().items(f32s(bbox.iter().map(|n| round4(n.0))));
         if group {
-            s.insert(Name(b"Group")).dict().pair(Name(b"S"), Name(b"Transparency")).pair(Name(b"I"), true).pair(Name(b"K"), false).pair(Name(b"CS"), Name(b"DeviceRGB"));
+            let mut g = s.insert(Name(b"Group")).dict();
+            g.pair(Name(b"S"), Name(b"Transparency")).pair(Name(b"I"), true).pair(Name(b"K"), false);
+            match space {
+                Some(srgb) => {
+                    g.insert(Name(b"CS")).array().item(Name(b"ICCBased")).item(srgb);
+                }
+                None => {
+                    g.pair(Name(b"CS"), Name(b"DeviceRGB"));
+                }
+            }
+            g.finish();
         }
         let mut resources = s.insert(Name(b"Resources")).dict();
         for (key, map) in [(&b"Shading"[..], &scope.shadings), (b"Pattern", &scope.patterns), (b"ExtGState", &scope.ext_g_states), (b"XObject", &scope.xobjects)] {

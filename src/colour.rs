@@ -354,8 +354,13 @@ impl<'a> Colour<'a> {
     }
 
     /// Write the colour objects (the sRGB stream, every `/Separation`, every `/ExtGState`, the output profile and the intent), and hand back what every page's resources name, the output intent for the catalog, and the record.
-    pub fn finish(self, pdf: &mut Pdf, next: &mut Ref) -> (PageResources, Ref, Record) {
-        let srgb = crate::images::icc_stream(pdf, next, self.srgb, 3);
+    ///
+    /// `srgb` is the sRGB stream's object when a blend's group named it before the colour objects were written.
+    pub fn finish(self, pdf: &mut Pdf, next: &mut Ref, srgb: Option<Ref>) -> (PageResources, Ref, Record) {
+        let srgb = match srgb {
+            Some(id) => crate::images::icc_stream_at(pdf, id, self.srgb, 3),
+            None => crate::images::icc_stream(pdf, next, self.srgb, 3),
+        };
         let mut spaces = Vec::new();
         for (i, s) in self.separations.iter().enumerate() {
             let id = next.bump();

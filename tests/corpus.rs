@@ -344,9 +344,10 @@ fn the_colour_story_is_written_and_its_refusals_are_the_oracles() {
 fn the_vectors_are_counted_as_the_oracle_counts_them_and_their_refusals_are_its_own() {
     let (list, blobs) = list_of("vectors");
     let records = write(&list, &blobs).unwrap().records;
-    assert_eq!(serde_json::from_str::<Value>(&records.vector_resources).unwrap(), serde_json::json!({ "shadings": 1, "patterns": 0, "extGStates": 2, "forms": 3 }));
+    // The blend's stacking context is one more isolated group (Egildo's ruling 15a): the stage and the box blended over it.
+    assert_eq!(serde_json::from_str::<Value>(&records.vector_resources).unwrap(), serde_json::json!({ "shadings": 1, "patterns": 0, "extGStates": 2, "forms": 4 }));
     let paint: Vec<Value> = serde_json::from_str(&records.paint).unwrap();
-    assert_eq!(paint.len(), 20);
+    assert_eq!(paint.len(), 21);
     assert!(paint.iter().any(|r| r["kind"] == "form" && r["params"]["reused"] == true), "the marker's form is drawn more than once and written once");
 
     let (roads, blobs) = list_of("roads");
@@ -360,6 +361,26 @@ fn the_vectors_are_counted_as_the_oracle_counts_them_and_their_refusals_are_its_
     let gradient = one.pages.iter_mut().flat_map(|p| &mut p.items).find_map(|i| match i { Item::Path(p) => match &mut p.fill { Some(list::Paint::Gradient(g)) => Some(&mut g.gradient), _ => None }, _ => None }).unwrap();
     gradient.stops.truncate(1);
     assert_eq!(write(&one, &blobs).unwrap_err().message, "shading: a gradient needs at least two stops");
+}
+
+/// The blending space of a blend (Egildo's ruling 15a), read back by hayro-syntax: under the colour story, the page whose blend no group isolates has a `/Group` whose `/CS` is the sRGB stream `/DefaultRGB` names, and the other page none; with no colour story, no page has one.
+#[test]
+fn a_blend_mixes_in_the_documents_srgb() {
+    use hayro_syntax::object::{Array, Dict, Name, Stream};
+    let (list, blobs) = list_of("vector-roads");
+    let pdf = hayro_syntax::Pdf::new(write(&list, &blobs).unwrap().bytes).unwrap();
+    let groups: Vec<bool> = pdf.pages().iter().map(|page| {
+        let Some(group) = page.raw().get::<Dict>(b"Group") else { return false };
+        let space = group.get::<Array>(b"CS").unwrap();
+        assert_eq!(space.iter::<Name>().next().as_deref(), Some(b"ICCBased".as_slice()));
+        let default = page.raw().get::<Dict>(b"Resources").and_then(|r| r.get::<Dict>(b"ColorSpace")).and_then(|c| c.get::<Array>(b"DefaultRGB")).unwrap();
+        assert_eq!({ let mut s = space.flex_iter(); s.next::<Name>(); s.next::<Stream>().unwrap().decoded().unwrap() }, { let mut d = default.flex_iter(); d.next::<Name>(); d.next::<Stream>().unwrap().decoded().unwrap() }, "the page's blending space is the sRGB of /DefaultRGB");
+        true
+    }).collect();
+    assert_eq!(groups, [true, false], "blend-difference mixes with the page; box-blend with its stage, a group of its own");
+    let (bare, blobs) = list_of("vectors");
+    let pdf = hayro_syntax::Pdf::new(write(&bare, &blobs).unwrap().bytes).unwrap();
+    assert!(pdf.pages().iter().all(|page| page.raw().get::<Dict>(b"Group").is_none()));
 }
 
 /// The facsimiles, read back by hayro-syntax: each painted facsimile is a Form XObject whose content is the source page's inside pdf-lib's two `q … Q` pairs, with `/FormType 1`, the source's box as `/BBox`, no `/Group`, and its font resolving to a program equal to the source's; two pages of one file share one copy of the font; and the refusals of an encrypted file, a file that is not a PDF and a page past the file's end, in the oracle's sentences. The forms against the oracle's are Caster's `npm run identity -- compare`.
