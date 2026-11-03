@@ -22,6 +22,6 @@ Run `cargo build` for the library and the binary, then `cargo test` with a Caste
 | serde, serde_json | 1.0.229, 1.0.154 | the list, read with `float_roundtrip` and `raw_value` |
 | sha2 | 0.11.1 | the blobs' names |
 | subsetter | 0.2.6 | the subset and the instancing |
-| skrifa (read-fonts 0.39.2) | 0.42.1, forme's copy under `vendor/skrifa` | the font reads; the copy leaves skrifa's hinting code out, as `NOTICE` says |
+| skrifa (read-fonts 0.39.2) | 0.42.1, forme's copy under `vendor/skrifa` | the font reads; the copy leaves skrifa's hinting code out and draws every pen through one type, as `NOTICE` says |
 | write-fonts | 0.48.1, forme's copy under `vendor/write-fonts` | subsetter's instanced `glyf`; the copy leaves the table repacker out, as `NOTICE` says |
 | flate2 (miniz_oxide) | 1.1.10 (0.9.1) | every stream at level 6; flate2 1.1.10 requires miniz_oxide 0.9 |

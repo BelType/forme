@@ -355,6 +355,8 @@ impl<'a> OutlineGlyph<'a> {
         pen: &mut impl OutlinePen,
     ) -> Result<AdjustedMetrics, DrawError> {
         let settings: DrawSettings<'a> = settings.into();
+        // forme: every pen reaches the unhinted drawing as one type, so the outline code is compiled once and not once per pen.
+        let pen = &mut DynPen(pen);
         match (settings.instance, settings.path_style) {
             (DrawInstance::Unhinted(size, location), PathStyle::FreeType) => {
                 self.draw_unhinted(size, location, settings.memory, settings.path_style, pen)
@@ -405,7 +407,7 @@ impl<'a> OutlineGlyph<'a> {
         location: impl Into<LocationRef<'a>>,
         user_memory: Option<&mut [u8]>,
         path_style: PathStyle,
-        pen: &mut impl OutlinePen,
+        pen: &mut DynPen<'_>,
     ) -> Result<AdjustedMetrics, DrawError> {
         let ppem = size.ppem();
         let coords = location.into().effective_coords();
@@ -1537,5 +1539,26 @@ mod tests {
             pen.to_string()
         };
         assert_ne!(outline_with_fractional, outline_without_fractional);
+    }
+}
+
+/// forme: a pen behind one type, so the unhinted drawing is compiled once for every pen.
+struct DynPen<'p>(&'p mut dyn OutlinePen);
+
+impl OutlinePen for DynPen<'_> {
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.0.move_to(x, y)
+    }
+    fn line_to(&mut self, x: f32, y: f32) {
+        self.0.line_to(x, y)
+    }
+    fn quad_to(&mut self, cx0: f32, cy0: f32, x: f32, y: f32) {
+        self.0.quad_to(cx0, cy0, x, y)
+    }
+    fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
+        self.0.curve_to(cx0, cy0, cx1, cy1, x, y)
+    }
+    fn close(&mut self) {
+        self.0.close()
     }
 }
