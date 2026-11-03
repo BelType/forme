@@ -72,7 +72,7 @@ fn run(args: &[String]) -> Result<(), Failure> {
     let written = forme::write(&list, &blobs).map_err(|r| Failure::Refused(r.message))?;
     let save = |path: &Path, bytes: &[u8]| std::fs::write(path, bytes).map_err(|e| Failure::Refused(format!("forme: cannot write {}: {e}", path.display())));
     if let Some(records) = &command.records {
-        save(records, serde_json::to_string(&written.records).expect("the records serialise").as_bytes())?;
+        save(records, forme::json::records(&written.records).as_bytes())?;
     }
     save(&command.out.expect("checked by parse_args"), &written.bytes)
 }

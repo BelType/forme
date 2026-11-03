@@ -7,6 +7,7 @@ pub mod content;
 pub mod facsimile;
 pub mod fonts;
 pub mod images;
+pub mod json;
 pub mod list;
 pub mod text;
 pub mod tree;
@@ -59,9 +60,8 @@ pub struct Written {
     pub records: Records,
 }
 
-/// The writer's records, serialised as Caster's `WriterRecords` JSON; the members this stage does not make yet are left out.
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
+/// The writer's records, serialised as Caster's `WriterRecords` JSON by [`json::records`].
+#[derive(Clone, Debug, PartialEq)]
 pub struct Records {
     /// Per page, the index of the content start each MCID opens, by MCID: 0, 1, 2 … in item order.
     pub mcids: Vec<Vec<usize>>,
@@ -78,19 +78,11 @@ pub struct Records {
     /// How many distinct image XObjects the file holds, the raster fallbacks' included, by the dedupe rule.
     pub xobjects: usize,
     /// One row per vector node painted, in painting order: Caster's `ReportPaint`, as JSON text.
-    #[serde(serialize_with = "raw_json")]
     pub paint: String,
     /// How many shadings, patterns, graphics states and transparency-group forms the vectors made, as JSON text.
-    #[serde(serialize_with = "raw_json")]
     pub vector_resources: String,
     /// The colour record, when the list has a colour story.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub colour: Option<colour::Record>,
-}
-
-/// A record member held as JSON text, written into the records as it is.
-fn raw_json<S: serde::Serializer>(text: &str, s: S) -> Result<S::Ok, S::Error> {
-    serde::Serialize::serialize(&serde_json::value::RawValue::from_string(text.to_string()).map_err(serde::ser::Error::custom)?, s)
 }
 
 /// The file a list makes.
@@ -347,6 +339,6 @@ mod wasm_probe {
     pub unsafe extern "C" fn forme_write(ptr: *const u8, len: usize) -> usize {
         let json = unsafe { std::slice::from_raw_parts(ptr, len) };
         let Ok(json) = std::str::from_utf8(json) else { return 0 };
-        crate::list::parse(json).and_then(|list| crate::write(&list, std::hint::black_box(&Default::default()))).map_or(0, |written| written.bytes.len() + serde_json::to_string(&written.records).map_or(0, |r| r.len()))
+        crate::list::parse(json).and_then(|list| crate::write(&list, std::hint::black_box(&Default::default()))).map_or(0, |written| written.bytes.len() + crate::json::records(&written.records).len())
     }
 }

@@ -177,6 +177,7 @@ fn every_instance_of_every_list_reads_back_as_the_list_says_and_as_the_oracle_wr
         let oracle_fonts = oracle_pdf.as_ref().map(page_fonts);
         let report: Option<Value> = (!refused).then(|| serde_json::from_str(&std::fs::read_to_string(lists().join(format!("{name}.report.json"))).unwrap()).unwrap());
         assert_eq!(written.records.faces.len(), list.resources.fonts.len(), "{name}: one record per instance");
+        let records: Value = serde_json::from_str(&forme::json::records(&written.records)).unwrap_or_else(|e| panic!("{name}: the records are not JSON: {e}"));
         for (i, instance) in list.resources.fonts.iter().enumerate() {
             let at = format!("{name} {}", instance.key);
             let record: &FaceRecord = &written.records.faces[i];
@@ -293,7 +294,7 @@ fn every_instance_of_every_list_reads_back_as_the_list_says_and_as_the_oracle_wr
             tally.to_unicode_equal += 1;
 
             // The record, member for member, where the writers share a rule; the program's own members are named as the expected differences.
-            let ours = serde_json::to_value(record).unwrap();
+            let ours = &records["faces"][i];
             let theirs = &report["emission"]["faces"][i];
             for member in SHARED {
                 assert_eq!(ours[member], theirs[member], "{at}: the record's {member}");

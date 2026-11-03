@@ -7,7 +7,6 @@
 //! - **Print marks** are stroked in `/All` at full tint, `0.25 w 0 J 0 j [] 0 d`, every number at thousandths.
 
 use pdf_writer::{Filter, Finish, Name, Pdf, Ref, TextStr};
-use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::Refusal;
@@ -83,78 +82,61 @@ impl PaintOps {
 }
 
 /// An item of the list, by its page and its index in that page's items.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Place {
     pub page: usize,
     pub item: usize,
 }
 
 /// A resolved colour as the report holds it.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Resolved {
     pub kind: &'static str,
     pub values: Vec<Num>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub tint: Option<Num>,
 }
 
 /// One row of the colour record: a text run's, keyed by `at`, or a rectangle's, whole.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Element {
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub at: Option<Place>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     pub target: PaintTarget,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
     pub resolved: Resolved,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub overprint: Option<Overprint>,
     pub operator: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub resource: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub black_text_policy: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub rect_pt: Option<[Num; 4]>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub page: Option<Num>,
 }
 
 /// One work-list entry: an RGB colour left as `rg`, the first painter's, counted once per use.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Work {
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub at: Option<Place>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     pub target: PaintTarget,
     pub rgb: [Num; 3],
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub css: Option<String>,
     pub uses: usize,
 }
 
 /// One colour space of the record.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Space {
     pub name: String,
     pub kind: &'static str,
     pub alternate: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub colorant: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub escaped: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub c1: Option<[Num; 4]>,
 }
 
 /// One overprint graphics state of the record.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq)]
 #[allow(non_snake_case)]
 pub struct State {
     pub name: String,
@@ -165,8 +147,7 @@ pub struct State {
 }
 
 /// The output intent of the record.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq)]
 pub struct OutputIntent {
     pub subtype: &'static str,
     pub condition: String,
@@ -181,8 +162,7 @@ pub struct OutputIntent {
 }
 
 /// Caster's `WrittenColour`: the writer's colour record.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Record {
     pub elements: Vec<Element>,
     pub color_spaces: Vec<Space>,

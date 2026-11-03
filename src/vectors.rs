@@ -9,6 +9,7 @@
 use pdf_writer::{Finish, Name, Pdf, Ref};
 
 use crate::Refusal;
+use crate::json::{array, n, object, opt_st, st};
 use crate::content::{Content, Operand, js_round, js_string, round3};
 use crate::images::Images;
 use crate::list::{BoxPt, ClipPath, DisplayList, FillRule, FormItem, Gradient, GradientType, GroupItem, Matrix, MaskType, Num, Paint, PathItem, PathSegment, RasterFallbackItem, ShadingSpace, SoftMask, Spread, Stroke, VectorItem, VectorOrigin};
@@ -119,16 +120,7 @@ pub struct Vectors<'a> {
     pub paint: Vec<String>,
 }
 
-// The paint record is written as JSON text by hand, as `JSON.stringify` writes it: one small writer instead of a serde value per row. An empty string is an absent member.
-
-/// A number as `JSON.stringify` writes it: `-0` as `0`, and `null` for what is not finite.
-fn n(x: f64) -> String {
-    if x.is_finite() { js_string(x) } else { "null".into() }
-}
-
-fn array(items: impl IntoIterator<Item = String>) -> String {
-    format!("[{}]", items.into_iter().collect::<Vec<_>>().join(","))
-}
+// The paint record is written as JSON text by hand, as `JSON.stringify` writes it, by [`crate::json`]'s small writer. An empty string is an absent member.
 
 fn nums(xs: &[Num], round: fn(f64) -> f64) -> String {
     array(xs.iter().map(|x| n(round(x.0))))
@@ -136,20 +128,6 @@ fn nums(xs: &[Num], round: fn(f64) -> f64) -> String {
 
 fn r3(xs: &[f64]) -> String {
     array(xs.iter().map(|&x| n(round3(x))))
-}
-
-/// A JSON string.
-fn st(text: &str) -> String {
-    crate::list::json_string(&text.encode_utf16().collect::<Vec<_>>())
-}
-
-fn opt_st(text: Option<&str>) -> String {
-    text.map_or(String::new(), st)
-}
-
-/// A JSON object of the members present.
-fn object(members: &[(&str, String)]) -> String {
-    format!("{{{}}}", members.iter().filter(|(_, v)| !v.is_empty()).map(|(k, v)| format!("\"{k}\":{v}")).collect::<Vec<_>>().join(","))
 }
 
 fn ops_num(xs: &[Num]) -> Vec<Operand<'static>> {

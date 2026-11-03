@@ -7,7 +7,6 @@
 use std::collections::BTreeMap;
 
 use pdf_writer::{Filter, Name, Pdf, Ref};
-use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::Refusal;
@@ -16,15 +15,13 @@ use crate::fonts::deflate;
 use crate::list::{Blobs, DisplayList, ImageKind, ImageSource, Item};
 
 /// What one image XObject became in the file, as Caster's `WrittenImageInfo` names it.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ImageInfo {
     pub path: &'static str,
     pub filter: &'static str,
     pub bits_per_component: u32,
     pub color_space: &'static str,
     pub has_s_mask: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub decode: Option<[u8; 8]>,
     pub width: f64,
     pub height: f64,
@@ -38,7 +35,7 @@ pub struct ImageInfo {
 }
 
 /// One image item painted, and the XObject it was painted with: Caster's `ImageUse`.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ImageUse {
     pub page: usize,
     pub item: usize,

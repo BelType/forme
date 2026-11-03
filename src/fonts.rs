@@ -16,7 +16,6 @@ use flate2::Compression;
 use flate2::write::ZlibEncoder;
 use pdf_writer::types::{CidFontType, FontFlags, SystemInfo};
 use pdf_writer::{Filter, Finish, Name, Pdf, Rect, Ref, Str};
-use serde::Serialize;
 use skrifa::instance::{Location, LocationRef, Size};
 use skrifa::outline::{DrawSettings, OutlinePen};
 use skrifa::raw::TableProvider;
@@ -41,8 +40,7 @@ const VARIABLE_TABLES: [&[u8; 4]; 6] = [b"fvar", b"gvar", b"avar", b"HVAR", b"MV
 const HINTING_TABLES: [&[u8; 4]; 3] = [b"cvt ", b"fpgm", b"prep"];
 
 /// What one instance became, as Caster's `CidFontStats` (`src/displayList/contract.ts`) names it, serialised as that type's JSON.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FaceRecord {
     pub id: String,
     /// The source's PostScript name (`name` ID 6), as the face declares it.
@@ -82,7 +80,7 @@ pub struct FaceRecord {
 }
 
 /// The record's timings: zero, since the writer reads no clock.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Timing {
     pub instance: f64,
     pub parse: f64,

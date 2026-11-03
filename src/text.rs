@@ -9,7 +9,6 @@
 //! - **The arithmetic is the oracle's**, operation for operation in its order, on doubles, rounded by [`round3`]; Rust neither reorders nor fuses floating-point operations, so the pen is the oracle's to the bit.
 
 use pdf_writer::Ref;
-use serde::Serialize;
 
 use crate::Refusal;
 use crate::colour::{Colour, PaintOps};
@@ -23,7 +22,7 @@ use crate::vectors::{Node, Scope, Vectors, clip_operators};
 pub const KERN_EPSILON: f64 = 2.0;
 
 /// The pen adjustment written before each segment of one text item, in thousandths of an em, `None` for the first: Caster's `WriterPen`.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Pen {
     pub page: usize,
     pub item: usize,
