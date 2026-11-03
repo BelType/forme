@@ -21,6 +21,11 @@ flate2 = "=1.1.10"
 hayro-write = "=0.7.0"
 hayro-syntax = { version = "=0.7.2", default-features = false, features = ["std"] }
 
+# The tab's face (src/wasm.rs). Only the `std` feature: serde-serialize stays off, so the module links no serde.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { version = "=0.2.129", default-features = false, features = ["std"] }
+js-sys = "=0.3.106"
+
 # The list is read by hand (src/read.rs) and links no serde. The tests write a list back through serde's Serialize, derived under this feature, to hold the reader's keys to the schema's names, and read the oracle's JSON with serde_json; forme names itself as a dev-dependency so `cargo test` turns the feature on and the module never does.
 [features]
 serde = ["dep:serde", "dep:serde_json"]
