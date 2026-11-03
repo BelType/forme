@@ -1,6 +1,6 @@
-//! The display list, version 5: a Caster document as plain data, in the order the writer paints it, written by hand from Caster's `src/displayList.ts`, whose TSDoc each member's doc comment carries. This module is the schema's authority on the Rust side; Caster's `displayList.ts` and `displayList/contract.ts` are the authority it follows.
+//! The display list, version 6: a Caster document as plain data, in the order the writer paints it, written by hand from Caster's `src/displayList.ts`, whose TSDoc each member's doc comment carries. This module is the schema's authority on the Rust side; Caster's `displayList.ts` and `displayList/contract.ts` are the authority it follows.
 //!
-//! Every struct refuses a field it does not name (`deny_unknown_fields`), so a field added on the JavaScript side is a parse failure here and never a silent omission, and `version` is read before anything else and refused unless it is 5 ([`parse`]). The list arrives as the JSON `JSON.stringify` makes of it with `resources.blobs` removed, which is the fixture format's list file; the blobs arrive beside it, keyed by their names ([`Blobs`]). JSON hides seven sharp edges, and each binds here:
+//! Every struct refuses a field it does not name (`deny_unknown_fields`), so a field added on the JavaScript side is a parse failure here and never a silent omission, and `version` is read before anything else and refused unless it is 6 ([`parse`]). The list arrives as the JSON `JSON.stringify` makes of it with `resources.blobs` removed, which is the fixture format's list file; the blobs arrive beside it, keyed by their names ([`Blobs`]). JSON hides seven sharp edges, and each binds here:
 //!
 //! - **Offsets are UTF-16 code units.** `text`, `segments.start` and `glyphs.clusters` count UTF-16 code units, so a text the writer writes is a [`Utf16`], read through forme's own unescape of the raw JSON string, because serde_json's `String` refuses the lone surrogate `JSON.stringify` writes as `\udXXX` and a DOM text can hold.
 //! - **Numbers are doubles, parsed exactly.** serde_json with `float_roundtrip`, so every number is the double JavaScript parsed, and every number of the list is a [`Num`], which writes an integral value back as JSON writes it, `-0` as `0`.
@@ -177,13 +177,12 @@ literal!(KindLink, "link");
 literal!(KindTag, "tag");
 literal!(TableRasters, "rasters");
 literal!(TableEmoji, "emoji");
-literal!(DeviceRgb, "DeviceRGB");
 
 /// The whole document, as the writer needs it and nothing else.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DisplayList {
-    /// 5; [`parse`] refuses any other before it reads the rest.
+    /// 6; [`parse`] refuses any other before it reads the rest.
     pub version: Num,
     pub info: DocumentInfo,
     pub writing: Writing,
@@ -205,7 +204,11 @@ impl DisplayList {
         for image in r.images.values() {
             keys.extend(image.blob.as_deref());
             keys.extend(image.jpeg.as_deref());
-            keys.extend(image.samples.as_ref().map(|s| s.blob.as_str()));
+            if let Some(samples) = &image.samples {
+                keys.push(&samples.blob);
+                keys.extend(samples.palette.as_deref());
+                keys.extend(samples.icc.as_deref());
+            }
         }
         for raster in r.rasters.values() {
             keys.extend(raster.blob.as_deref());
@@ -221,7 +224,7 @@ impl DisplayList {
 }
 
 /// The version this module reads.
-pub const LIST_VERSION: f64 = 5.0;
+pub const LIST_VERSION: f64 = 6.0;
 
 /// Read a list from its JSON: the version first, with the validator's sentence, then the whole schema.
 ///
@@ -240,9 +243,9 @@ pub fn parse(json: &str) -> Result<DisplayList, Refusal> {
             Some(serde_json::Value::String(s)) => s.clone(),
             Some(other) => other.to_string(),
         };
-        return Err(Refusal::new(format!("caster: the writer reads a display list of version 5, and this one is version {shown}; a list is written again by print(), never upgraded")));
+        return Err(Refusal::new(format!("caster: the writer reads a display list of version {}, and this one is version {shown}; a list is written again by print(), never upgraded", crate::content::js_string(LIST_VERSION))));
     }
-    serde_json::from_str(json).map_err(|e| Refusal::new(format!("forme: the display list is not the schema of version 5: {e}")))
+    serde_json::from_str(json).map_err(|e| Refusal::new(format!("forme: the display list is not the schema of version 6: {e}")))
 }
 
 /// What the file says of itself.
@@ -415,7 +418,7 @@ pub struct ImageSource {
     /// With a file `blob`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mime: Option<String>,
-    /// The pixels the image pass decoded, where no PDF filter reads the file (WebP, AVIF, GIF). Version 5.
+    /// The pixels the image pass decoded, where no PDF filter reads the file (WebP, AVIF, GIF), or where no predictor describes a PNG's `IDAT` (version 6). Version 5.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub samples: Option<ImageSamples>,
     /// Key into the blobs: the JPEG the opaque-photo rule re-encoded the pixels as, which the writer carries under `/DCTDecode`. Version 5.
@@ -451,7 +454,7 @@ pub enum ImageTag {
     Artifact,
 }
 
-/// What the source was, where the list holds the pass's pixels or JPEG: its format as the report names it, its length, and a PNG's `gAMA`-only flag. Report only.
+/// What the source was, where the list holds the pass's pixels or JPEG: its format as the report names it, its length, a PNG's `gAMA`-only flag, and why a PNG was decoded (version 6). Report only.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Original {
@@ -459,6 +462,9 @@ pub struct Original {
     pub bytes: Num,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gamma_only: Option<bool>,
+    /// What in a decoded PNG `/Predictor 15` cannot describe: `alpha`, `interlace` or `palette-trns`. Version 6.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
 }
 
 /// The page of a PDF a facsimile is.
@@ -469,17 +475,26 @@ pub struct FacsimileRef {
     pub page: Num,
 }
 
-/// Decoded pixels: RGBA, row-major from the top, eight bits a sample in the browser's sRGB, unpremultiplied. The writer splits it into the RGB stream and, where any pixel is not opaque, the `/SMask`. Version 5.
+/// Decoded pixels, interleaved, row-major from the top: each pixel's colour components in `colorSpace`, then its alpha where `alpha` is set, `bitsPerComponent` bits each, big-endian at 16. The browser's are RGBA at eight bits in its sRGB (version 5); a PNG's are its own depth and colour space, a depth under 8 unpacked to one sample a byte, a palette's index with its `tRNS` alpha (version 6). The writer splits the colour from the alpha and writes the `/SMask` only where some pixel is not opaque.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImageSamples {
-    /// Key into the blobs: the pixels as RGBA.
+    /// Key into the blobs: the interleaved samples.
     pub blob: String,
     pub width: Num,
     pub height: Num,
-    pub color_space: DeviceRgb,
-    /// 8.
+    /// `DeviceRGB`, `DeviceGray` or `Indexed` (over `DeviceRGB`, with `palette`); a string, so the validator refuses another in its own sentence.
+    pub color_space: String,
+    /// 8 or 16; 16 never with `Indexed`.
     pub bits_per_component: Num,
+    /// Each pixel carries an alpha sample after its colour. Version 6.
+    pub alpha: bool,
+    /// Key into the blobs: the palette as RGB triples, with `Indexed` only. Version 6.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub palette: Option<String>,
+    /// Key into the blobs: the ICC profile the colour components are in, never with `Indexed`. Version 6.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icc: Option<String>,
 }
 
 /// One quality the opaque-photo rule encoded and measured.

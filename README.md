@@ -4,7 +4,7 @@ forme is a PDF 2.0 writer for Caster, BelType's printer, written in Rust. In let
 
 ## What it reads
 
-forme reads the display list of version 5, as Caster's `src/displayList.ts` defines it, and nothing else: no page, no measurement, no clock. The list arrives as the JSON `JSON.stringify` makes of it without `resources.blobs`, and the blobs arrive beside it, each named by its SHA-256. On the machine that is Caster's fixture format, a `<name>.json` beside a `blobs/` folder. `src/list.rs` is the schema on the Rust side and names the sharp edges JSON hides: offsets in UTF-16 code units, numbers parsed exactly, JavaScript's rounding, the four arrays whose order is data. `src/validate.rs` refuses what Caster's `validateList` refuses, with the same sentences in the same order.
+forme reads the display list of version 6, as Caster's `src/displayList.ts` defines it, and nothing else: no page, no measurement, no clock. The list arrives as the JSON `JSON.stringify` makes of it without `resources.blobs`, and the blobs arrive beside it, each named by its SHA-256. On the machine that is Caster's fixture format, a `<name>.json` beside a `blobs/` folder. `src/list.rs` is the schema on the Rust side and names the sharp edges JSON hides: offsets in UTF-16 code units, numbers parsed exactly, JavaScript's rounding, the four arrays whose order is data. `src/validate.rs` refuses what Caster's `validateList` refuses, with the same sentences in the same order.
 
 ## The gate it is held to
 

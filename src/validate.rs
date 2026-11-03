@@ -1,6 +1,6 @@
 //! The refusals of a list the writer could not write, each a sentence, before a byte is written: Caster's `validateList` (`src/displayList/validate.ts`), ported check for check, in its order, with its sentences.
 //!
-//! What it holds: the version (read first, by [`crate::list::parse`]); every blob key a resource names; the font instances (unique keys, sorted widths, a width for every glyph a text item shows and every space glyph it names); every image and raster key a page item names; the marked content of each page (no end without a start, none left open); the links (`order` running 0, 1, 2 … over the document, a destination or a URI on each); the structure tree (an element index anywhere in range, one parent each, no cycle, a content child that is a content start naming its element back, every content start some element's child, a link child owned by the link's element, the attribute keys the schema names). What it leaves to the writer is what only writing finds. A number in a sentence is written as JavaScript's `String` writes it, so a sentence is the oracle's to the character.
+//! What it holds: the version (read first, by [`crate::list::parse`]); every blob key a resource names; each image's samples in a shape the schema names, as many bytes as it says (version 6); the font instances (unique keys, sorted widths, a width for every glyph a text item shows and every space glyph it names); every image and raster key a page item names; the marked content of each page (no end without a start, none left open); the links (`order` running 0, 1, 2 … over the document, a destination or a URI on each); the structure tree (an element index anywhere in range, one parent each, no cycle, a content child that is a content start naming its element back, every content start some element's child, a link child owned by the link's element, the attribute keys the schema names). What it leaves to the writer is what only writing finds. A number in a sentence is written as JavaScript's `String` writes it, so a sentence is the oracle's to the character.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -17,13 +17,39 @@ pub const ATTRIBUTE_KEYS: [&str; 8] = ["O", "ListNumbering", "BBox", "Scope", "H
 /// The first thing in the list that is not so, in the sentence `validateList` writes; one that concerns an item carries it as `list_item`.
 pub fn validate(list: &DisplayList, blobs: &Blobs) -> Result<(), Refusal> {
     if list.version.0 != crate::list::LIST_VERSION {
-        return Err(Refusal::new(format!("caster: the writer reads a display list of version 5, and this one is version {}; a list is written again by print(), never upgraded", js_string(list.version.0))));
+        return Err(Refusal::new(format!("caster: the writer reads a display list of version {}, and this one is version {}; a list is written again by print(), never upgraded", js_string(crate::list::LIST_VERSION), js_string(list.version.0))));
     }
     check_blobs(list, blobs)?;
+    check_samples(list, blobs)?;
     check_fonts(list)?;
     check_items(list)?;
     check_links(list)?;
     check_tree(list)
+}
+
+/// Each image's samples in a shape the schema names, holding as many bytes as the shape says (version 6).
+fn check_samples(list: &DisplayList, blobs: &Blobs) -> Result<(), Refusal> {
+    for (key, image) in &list.resources.images {
+        let Some(s) = &image.samples else { continue };
+        let space = s.color_space.as_str();
+        let bits = s.bits_per_component.0;
+        let indexed = space == "Indexed";
+        let palette_bytes = s.palette.as_ref().map_or(0, |p| blobs[p].len());
+        let named = matches!(space, "DeviceRGB" | "DeviceGray" | "Indexed") && (bits == 8.0 || bits == 16.0);
+        if !named || indexed != s.palette.is_some() || (indexed && (bits != 8.0 || s.icc.is_some() || palette_bytes % 3 != 0 || !(3..=768).contains(&palette_bytes))) {
+            let palette = if s.palette.is_some() { format!(" with a palette of {palette_bytes} bytes") } else { String::new() };
+            let profile = if s.icc.is_some() { " with a profile" } else { "" };
+            return Err(Refusal::new(format!("caster: image {key}'s samples are {space} at {} bits{palette}{profile}, a shape the schema does not name", js_string(bits))));
+        }
+        let components = if space == "DeviceRGB" { 3.0 } else { 1.0 };
+        let expected = s.width.0 * s.height.0 * (components + if s.alpha { 1.0 } else { 0.0 }) * (bits / 8.0);
+        let held = blobs[&s.blob].len();
+        if held as f64 != expected {
+            let alpha = if s.alpha { " with alpha" } else { "" };
+            return Err(Refusal::new(format!("caster: image {key}'s samples hold {held} bytes, and {} by {} {space} at {} bits{alpha} is {}", js_string(s.width.0), js_string(s.height.0), js_string(bits), js_string(expected))));
+        }
+    }
+    Ok(())
 }
 
 /// A number as a set key: `-0` and `0` are one, as `SameValueZero` has them.
@@ -45,6 +71,8 @@ fn check_blobs(list: &DisplayList, blobs: &Blobs) -> Result<(), Refusal> {
         named(image.blob.as_deref(), &|| format!("image {key} ({})", image.dom_path))?;
         named(image.jpeg.as_deref(), &|| format!("image {key}'s photo JPEG"))?;
         named(image.samples.as_ref().map(|s| s.blob.as_str()), &|| format!("image {key}'s samples"))?;
+        named(image.samples.as_ref().and_then(|s| s.palette.as_deref()), &|| format!("image {key}'s palette"))?;
+        named(image.samples.as_ref().and_then(|s| s.icc.as_deref()), &|| format!("image {key}'s profile"))?;
     }
     for (key, raster) in &r.rasters {
         named(raster.blob.as_deref(), &|| format!("raster {key} ({})", raster.feature))?;

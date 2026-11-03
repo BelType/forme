@@ -63,9 +63,9 @@ fn the_validator_passes_every_committed_list_the_cff2_list_among_them() {
     }
 }
 
-/// The nineteen broken lists of Caster's `test/displayList.test.ts`, each changed as that test changes it, and each refused with the sentence and the item `validateList` gives, as Caster's validator printed them on 2026-11-02.
+/// The twenty-one broken lists of Caster's `test/displayList.test.ts`, each changed as that test changes it, and each refused with the sentence and the item `validateList` gives, as Caster's validator printed them on 2026-11-02 (the last two on 2026-11-03, version 6).
 #[test]
-fn the_validator_refuses_the_nineteen_broken_lists_with_the_oracles_sentences() {
+fn the_validator_refuses_the_twenty_one_broken_lists_with_the_oracles_sentences() {
     let refused = |name: &str, change: &dyn Fn(&mut DisplayList), message: &str, item: Option<[f64; 2]>| {
         let (mut list, blobs) = list_of(name);
         change(&mut list);
@@ -96,7 +96,7 @@ fn the_validator_refuses_the_nineteen_broken_lists_with_the_oracles_sentences() 
         }};
     }
 
-    refused("cast", &|l| l.version = list::Num(4.0), "caster: the writer reads a display list of version 5, and this one is version 4; a list is written again by print(), never upgraded", None);
+    refused("cast", &|l| l.version = list::Num(4.0), "caster: the writer reads a display list of version 6, and this one is version 4; a list is written again by print(), never upgraded", None);
     refused("cast", &|l| l.resources.fonts[0].blob = "0".repeat(64), "caster: the font instance Source Sans 3#1|wght=700 names the blob 0000000000000000000000000000000000000000000000000000000000000000, and the display list holds no bytes under that key", None);
     refused("cast", &|l| l.resources.images.values_mut().next().unwrap().jpeg = Some("f".repeat(64)), "caster: image 0's photo JPEG names the blob ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff, and the display list holds no bytes under that key", None);
     refused("cast", &|l| { let copy = l.resources.fonts[0].clone(); l.resources.fonts.push(copy); }, "caster: the display list holds two font instances under the key Source Sans 3#1|wght=700", None);
@@ -135,6 +135,12 @@ fn the_validator_refuses_the_nineteen_broken_lists_with_the_oracles_sentences() 
         let place = links(l).into_iter().find(|&(p, at)| matches!(&l.pages[p].items[at], Item::Link(link) if link.target.dest.is_none())).unwrap();
         link_at!(l, place).target.uri = None;
     }, "caster: the link of order 0 has neither a destination in the file nor a URI; the builder resolves one for every link without a destination", None);
+    // Version 6's two: a palette's samples at 16 bits, and samples holding twice the bytes their shape says.
+    fn indexed(l: &mut DisplayList) -> &mut list::ImageSamples {
+        l.resources.images.values_mut().find_map(|i| i.samples.as_mut().filter(|s| s.color_space == "Indexed")).unwrap()
+    }
+    refused("images", &|l| indexed(l).bits_per_component = list::Num(16.0), "caster: image 4's samples are Indexed at 16 bits with a palette of 6 bytes, a shape the schema does not name", None);
+    refused("images", &|l| indexed(l).alpha = false, "caster: image 4's samples hold 3072 bytes, and 48 by 32 Indexed at 8 bits is 1536", None);
 }
 
 #[test]
