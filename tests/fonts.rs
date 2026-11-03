@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use forme::content::js_round;
 use forme::fonts::{FaceRecord, program};
 use forme::list::{self, DisplayList, FontInstance, Num};
-use forme::{read_blobs, write_partial};
+use forme::{read_blobs, write};
 use hayro_syntax::Pdf;
 use hayro_syntax::object::{Array, Dict, Name, Object, Stream};
 use serde_json::Value;
@@ -170,7 +170,7 @@ fn every_instance_of_every_list_reads_back_as_the_list_says_and_as_the_oracle_wr
     for (name, refused) in corpus() {
         tally.lists += 1;
         let (list, blobs) = list_of(&name);
-        let written = write_partial(&list, &blobs).unwrap_or_else(|r| panic!("{name}: {r}")).0;
+        let written = write(&list, &blobs).unwrap_or_else(|r| panic!("{name}: {r}"));
         let pdf = Pdf::new(written.bytes.clone()).unwrap_or_else(|e| panic!("{name}: hayro-syntax cannot open forme's file: {e:?}"));
         let fonts = page_fonts(&pdf);
         let oracle_pdf = (!refused).then(|| Pdf::new(std::fs::read(lists().join(format!("{name}.pdf"))).unwrap()).unwrap());

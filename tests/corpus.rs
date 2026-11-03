@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use forme::list::{self, DisplayList, Item, StructChild, TagEndItem, TagStart};
-use forme::{Refusal, read_blobs, validate::validate, write, write_partial};
+use forme::{Refusal, read_blobs, validate::validate, write};
 use serde_json::Value;
 
 fn lists() -> PathBuf {
@@ -147,35 +147,28 @@ fn the_validator_refuses_the_twenty_one_broken_lists_with_the_oracles_sentences(
 fn the_same_list_writes_the_same_bytes_twice_and_whatever_its_keys_order() {
     for (name, _) in corpus() {
         let (list, blobs) = list_of(&name);
-        let once = write_partial(&list, &blobs).unwrap_or_else(|r| panic!("{name}: {r}")).0.bytes;
-        assert_eq!(write_partial(&list, &blobs).unwrap().0.bytes, once, "{name}: twice");
+        let once = write(&list, &blobs).unwrap_or_else(|r| panic!("{name}: {r}")).bytes;
+        assert_eq!(write(&list, &blobs).unwrap().bytes, once, "{name}: twice");
         let value: Value = serde_json::from_str(&text_of(&name)).unwrap();
         for descending in [false, true] {
             let other = list::parse(&reordered(&value, descending)).unwrap();
-            assert_eq!(write_partial(&other, &blobs).unwrap().0.bytes, once, "{name}: keys {}", if descending { "descending" } else { "ascending" });
+            assert_eq!(write(&other, &blobs).unwrap().bytes, once, "{name}: keys {}", if descending { "descending" } else { "ascending" });
         }
     }
 }
 
 #[test]
-fn the_writer_refuses_by_name_what_this_stage_does_not_write_a_blob_that_is_not_its_name_and_a_date_that_is_not_an_instant() {
-    for (name, _) in corpus().into_iter().filter(|(n, _)| !n.starts_with("facsimile")) {
-        let (list, blobs) = list_of(&name);
-        assert_eq!(write(&list, &blobs).unwrap_or_else(|r| panic!("{name}: {r}")).bytes, write_partial(&list, &blobs).unwrap().0.bytes, "{name}: written whole");
-    }
+fn the_writer_refuses_a_blob_that_is_not_its_name_and_a_date_that_is_not_an_instant() {
     let (mut list, mut blobs) = list_of("cast");
-    let (facsimile, facsimile_blobs) = list_of("facsimile");
-    let refused = write(&facsimile, &facsimile_blobs).unwrap_err().message;
-    assert!(refused.starts_with("forme: image 0 (") && refused.ends_with(") is a facsimile, which this stage of forme does not write yet"), "{refused}");
     let font = list.resources.fonts[0].blob.clone();
     blobs.get_mut(&font).unwrap()[0] ^= 1;
-    assert!(write_partial(&list, &blobs).unwrap_err().message.starts_with(&format!("forme: the blob {font} holds bytes whose SHA-256 is ")));
+    assert!(write(&list, &blobs).unwrap_err().message.starts_with(&format!("forme: the blob {font} holds bytes whose SHA-256 is ")));
     blobs.get_mut(&font).unwrap()[0] ^= 1;
     list.info.created = "2026-11-02T10:20:30.456Z".into();
-    let text = String::from_utf8_lossy(&write_partial(&list, &blobs).unwrap().0.bytes).into_owned();
+    let text = String::from_utf8_lossy(&write(&list, &blobs).unwrap().bytes).into_owned();
     assert!(text.contains("/CreationDate (D:20261102102030Z)") && text.contains("/ModDate (D:20261102102030Z)"), "both dates, at whole seconds");
     list.info.created = "2026-11-02 10:20".into();
-    assert_eq!(write_partial(&list, &blobs).unwrap_err().message, "caster: the display list's info.created is \"2026-11-02 10:20\", which is not an ISO 8601 instant in UTC (YYYY-MM-DDTHH:mm:ssZ)");
+    assert_eq!(write(&list, &blobs).unwrap_err().message, "caster: the display list's info.created is \"2026-11-02 10:20\", which is not an ISO 8601 instant in UTC (YYYY-MM-DDTHH:mm:ssZ)");
 }
 
 #[test]
@@ -221,12 +214,12 @@ fn the_validator_refuses_the_four_other_broken_trees_with_the_oracles_sentences(
     }, "caster: structure element 1 (Document/H1[0]) lists item 3 of page 1, which opens content for element 2", Some([0.0, 3.0]));
 }
 
-/// The page loop's records against the list they come from: one pen per text item with one adjustment per segment, the first none; the MCIDs of each page its content starts in item order; every list with nothing left out written by `write` as by `write_partial`. The records against the oracle's are Caster's `npm run identity -- compare`.
+/// The page loop's records against the list they come from: one pen per text item with one adjustment per segment, the first none; the MCIDs of each page its content starts in item order. The records against the oracle's are Caster's `npm run identity -- compare`.
 #[test]
 fn the_page_loop_records_every_run_and_content_start() {
     for (name, _) in corpus() {
         let (list, blobs) = list_of(&name);
-        let records = write_partial(&list, &blobs).unwrap_or_else(|r| panic!("{name}: {r}")).0.records;
+        let records = write(&list, &blobs).unwrap_or_else(|r| panic!("{name}: {r}")).records;
         let texts: Vec<(usize, usize, usize)> = list.pages.iter().enumerate().flat_map(|(p, page)| page.items.iter().enumerate().filter_map(move |(at, i)| match i { Item::Text(t) => Some((p, at, t.segments.x.len())), _ => None })).collect();
         assert_eq!(records.pens.len(), texts.len(), "{name}: one pen per text item");
         for (pen, &(p, at, segments)) in records.pens.iter().zip(&texts) {
@@ -237,14 +230,6 @@ fn the_page_loop_records_every_run_and_content_start() {
             let starts: Vec<usize> = page.items.iter().enumerate().filter(|(_, i)| matches!(i, Item::TagStart(t) if matches!(t.start, TagStart::Content(_)))).map(|(at, _)| at).collect();
             assert_eq!(mcids, &starts, "{name}: the MCIDs are the content starts in item order");
         }
-        let facsimile = |source: &list::Num| list.resources.images.get(&(source.0 as u32)).is_some_and(|s| s.kind == list::ImageKind::Facsimile);
-        let whole = list.pages.iter().flat_map(|p| &p.items).all(|i| match i {
-            Item::Image(image) => !facsimile(&image.source),
-            i => matches!(i, Item::Text(_) | Item::TagStart(_) | Item::TagEnd(_) | Item::Link(_) | Item::Rect(_) | Item::Marks(_)),
-        });
-        if whole {
-            assert_eq!(write(&list, &blobs).unwrap().bytes, write_partial(&list, &blobs).unwrap().0.bytes, "{name}: nothing left out");
-        }
     }
 }
 
@@ -254,7 +239,7 @@ fn every_page_points_into_the_tree_and_two_elements_with_one_id_are_refused() {
     use hayro_syntax::object::{Array, Name};
     for (name, _) in corpus() {
         let (list, blobs) = list_of(&name);
-        let bytes = write_partial(&list, &blobs).unwrap_or_else(|r| panic!("{name}: {r}")).0.bytes;
+        let bytes = write(&list, &blobs).unwrap_or_else(|r| panic!("{name}: {r}")).bytes;
         let pdf = hayro_syntax::Pdf::new(bytes).unwrap_or_else(|e| panic!("{name}: {e:?}"));
         for (index, (page, listed)) in pdf.pages().iter().zip(&list.pages).enumerate() {
             let raw = page.raw();
@@ -268,7 +253,7 @@ fn every_page_points_into_the_tree_and_two_elements_with_one_id_are_refused() {
     let ids: Vec<usize> = list.structure.elements.iter().enumerate().filter(|(_, e)| e.id.is_some()).map(|(i, _)| i).collect();
     list.structure.elements[ids[1]].id = list.structure.elements[ids[0]].id.clone();
     let id = list.structure.elements[ids[0]].id.clone().unwrap();
-    assert_eq!(write_partial(&list, &blobs).unwrap_err().message, format!("caster: two elements carry the /ID {}", serde_json::to_string(&id).unwrap()));
+    assert_eq!(write(&list, &blobs).unwrap_err().message, format!("caster: two elements carry the /ID {}", serde_json::to_string(&id).unwrap()));
 }
 
 /// Every image the lists paint, read back by hayro-syntax from the page that names it: a file passed through is the file (a JPEG's bytes, a PNG's `IDAT`), the photo rule's JPEG is the list's, and samples inflate to the list's colour plane, with an `/SMask` that inflates to its alpha exactly where some pixel is not opaque. The XObjects against the oracle's are Caster's `npm run identity -- compare --only text,tags,images`.
@@ -278,10 +263,11 @@ fn every_painted_image_is_the_lists_bytes_in_the_file() {
     let mut seen = 0;
     for (name, _) in corpus() {
         let (list, blobs) = list_of(&name);
-        let written = write_partial(&list, &blobs).unwrap_or_else(|r| panic!("{name}: {r}")).0;
+        let written = write(&list, &blobs).unwrap_or_else(|r| panic!("{name}: {r}"));
         let pdf = hayro_syntax::Pdf::new(written.bytes).unwrap();
         let pages = pdf.pages();
-        for used in &written.records.images {
+        // A facsimile's Form XObject is the facsimile test's.
+        for used in written.records.images.iter().filter(|u| u.info.path != "form") {
             let xobject: Stream = pages[used.page].raw().get::<Dict>(b"Resources").and_then(|r| r.get::<Dict>(b"XObject")).and_then(|x| x.get::<Stream>(used.name.as_bytes())).unwrap_or_else(|| panic!("{name}: {} on page {}", used.name, used.page));
             let source = &list.resources.images[&used.source];
             let what = format!("{name}: image {} ({})", used.source, used.info.path);
@@ -316,7 +302,7 @@ fn every_painted_image_is_the_lists_bytes_in_the_file() {
 fn the_colour_story_is_written_and_its_refusals_are_the_oracles() {
     use hayro_syntax::object::{Array, Dict, Name, Stream};
     let (list, blobs) = list_of("roads");
-    let written = write_partial(&list, &blobs).unwrap().0;
+    let written = write(&list, &blobs).unwrap();
     let record = written.records.colour.as_ref().expect("a colour record");
     assert!(record.black_text_runs > 0 && record.color_spaces.iter().any(|s| s.colorant.as_deref() == Some("All")));
     let pdf = hayro_syntax::Pdf::new(written.bytes).unwrap();
@@ -331,14 +317,14 @@ fn the_colour_story_is_written_and_its_refusals_are_the_oracles() {
 
     let mut rgb = list.clone();
     rgb.writing.colour.as_mut().unwrap().profiles.cmyk = rgb.writing.colour.as_ref().unwrap().profiles.srgb.clone();
-    assert_eq!(write_partial(&rgb, &blobs).unwrap_err().message, "colorResources: the output profile is \"RGB \", not CMYK");
+    assert_eq!(write(&rgb, &blobs).unwrap_err().message, "colorResources: the output profile is \"RGB \", not CMYK");
     let mut bare = list.clone();
     bare.writing.colour = None;
-    assert_eq!(write_partial(&bare, &blobs).unwrap_err().message, "caster: print marks are stroked in the /All separation, which needs the colour options");
+    assert_eq!(write(&bare, &blobs).unwrap_err().message, "caster: print marks are stroked in the /All separation, which needs the colour options");
     let mut twice = list.clone();
     let spot = twice.pages.iter_mut().flat_map(|p| &mut p.items).find_map(|i| match i { Item::Text(t) => match &mut t.fill.ink { Some(list::Ink::Spot(s)) => Some(s), _ => None }, _ => None }).unwrap();
     spot.spot = "All".into();
-    assert_eq!(write_partial(&twice, &blobs).unwrap_err().message, "colorResources: the spot \"All\" is declared with two alternates, device-cmyk(0 1 0.65 0.15) and device-cmyk(1 1 1 1)");
+    assert_eq!(write(&twice, &blobs).unwrap_err().message, "colorResources: the spot \"All\" is declared with two alternates, device-cmyk(0 1 0.65 0.15) and device-cmyk(1 1 1 1)");
 }
 
 #[test]
@@ -361,4 +347,67 @@ fn the_vectors_are_counted_as_the_oracle_counts_them_and_their_refusals_are_its_
     let gradient = one.pages.iter_mut().flat_map(|p| &mut p.items).find_map(|i| match i { Item::Path(p) => match &mut p.fill { Some(list::Paint::Gradient(g)) => Some(&mut g.gradient), _ => None }, _ => None }).unwrap();
     gradient.stops.truncate(1);
     assert_eq!(write(&one, &blobs).unwrap_err().message, "shading: a gradient needs at least two stops");
+}
+
+/// The facsimiles, read back by hayro-syntax: each painted facsimile is a Form XObject whose content is the source page's inside pdf-lib's two `q … Q` pairs, with `/FormType 1`, the source's box as `/BBox`, no `/Group`, and its font resolving to a program equal to the source's; two pages of one file share one copy of the font; and the refusals of an encrypted file, a file that is not a PDF and a page past the file's end, in the oracle's sentences. The forms against the oracle's are Caster's `npm run identity -- compare`.
+#[test]
+fn every_facsimile_is_its_source_page_as_a_form() {
+    use hayro_syntax::object::{Array, Dict, Stream};
+    for name in ["facsimile", "facsimile-pages"] {
+        let (list, blobs) = list_of(name);
+        let written = write(&list, &blobs).unwrap_or_else(|r| panic!("{name}: {r}"));
+        let pdf = hayro_syntax::Pdf::new(written.bytes).unwrap();
+        let mut fonts = Vec::new();
+        for used in written.records.images.iter().filter(|u| u.info.path == "form") {
+            let source_list = &list.resources.images[&used.source];
+            let source = hayro_syntax::Pdf::new(blobs[source_list.blob.as_ref().unwrap()].clone()).unwrap();
+            let page = &source.pages()[source_list.facsimile.as_ref().unwrap().page.0 as usize - 1];
+            let form: Stream = pdf.pages()[used.page].raw().get::<Dict>(b"Resources").and_then(|r| r.get::<Dict>(b"XObject")).and_then(|x| x.get::<Stream>(used.name.as_bytes())).unwrap();
+            let what = format!("{name}: {} on page {}", used.name, used.page);
+            assert!(used.name.starts_with("Fc"), "{what}: named as the oracle names a facsimile");
+            let mut content = b"q\n\nq\n\n".to_vec();
+            content.extend_from_slice(&page.raw().get::<Stream>(b"Contents").or_else(|| page.raw().get::<Array>(b"Contents").and_then(|a| a.iter::<Stream>().next())).unwrap().decoded().unwrap());
+            content.extend_from_slice(b"\nQ\n\nQ\n\n");
+            assert_eq!(*form.decoded().unwrap(), content, "{what}: the content");
+            let dict = form.dict();
+            assert_eq!(dict.get::<i32>(b"FormType"), Some(1), "{what}: /FormType");
+            assert!(dict.get::<Dict>(b"Group").is_none(), "{what}: no /Group");
+            let bbox: Vec<f64> = dict.get::<Array>(b"BBox").unwrap().iter::<f64>().collect();
+            assert_eq!((bbox[2] - bbox[0], bbox[3] - bbox[1]), (used.info.width, used.info.height), "{what}: the box");
+            let font_dict = dict.get::<Dict>(b"Resources").and_then(|r| r.get::<Dict>(b"Font")).unwrap();
+            let (key, font) = font_dict.entries().next().unwrap();
+            let source_font = page.resources().fonts.get::<Dict>(key.as_ref()).unwrap();
+            assert_eq!(program(&font_dict.get::<Dict>(key.as_ref()).unwrap()), program(&source_font), "{what}: the font program");
+            fonts.push(format!("{font:?}"));
+        }
+        assert_eq!(fonts.len(), list.resources.images.len(), "{name}: every facsimile painted");
+        fonts.dedup();
+        assert_eq!(fonts.len(), 1, "{name}: one copy of the font the pages share");
+    }
+    let (mut list, mut blobs) = list_of("facsimile");
+    let mut refused = |bytes: Vec<u8>, page: f64| {
+        let key = forme_hex(&bytes);
+        let source = list.resources.images.get_mut(&0).unwrap();
+        source.blob = Some(key.clone());
+        source.facsimile.as_mut().unwrap().page = list::Num(page);
+        blobs.insert(key, bytes);
+        write(&list, &blobs).unwrap_err().message
+    };
+    let fixtures = lists().join("../facsimile");
+    let url = "https://print.invalid/facsimile/fixture.pdf";
+    assert_eq!(refused(std::fs::read(fixtures.join("encrypted.pdf")).unwrap(), 1.0), format!("caster: the facsimile at object[0] names {url}, which is encrypted; an encrypted file cannot be carried into a PDF/UA-2 file, and the printer asks for no password. Ship the page from an unencrypted copy"));
+    assert_eq!(refused(std::fs::read(fixtures.join("fixture.pdf")).unwrap(), 3.0), format!("caster: the facsimile at object[0] asks for page 3 of {url}, which has 2 pages"));
+    assert!(refused(b"not a PDF".to_vec(), 1.0).starts_with(&format!("caster: the facsimile at object[0] names {url}, which cannot be read as a PDF: ")));
+}
+
+/// A font's program, decoded, through its descendant where it has one.
+fn program(font: &hayro_syntax::object::Dict<'_>) -> Vec<u8> {
+    use hayro_syntax::object::{Array, Dict, Stream};
+    let font = font.get::<Array>(b"DescendantFonts").and_then(|a| a.iter::<Dict>().next()).unwrap_or_else(|| font.clone());
+    font.get::<Dict>(b"FontDescriptor").and_then(|f| f.get::<Stream>(b"FontFile2")).unwrap().decoded().unwrap().to_vec()
+}
+
+fn forme_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
 }
