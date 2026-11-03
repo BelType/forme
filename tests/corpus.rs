@@ -446,3 +446,101 @@ fn a_passed_through_pngs_iccp_profile_is_inflated_into_its_iccbased_stream() {
     }).unwrap();
     assert_eq!(*icc.decoded().unwrap(), profile);
 }
+
+/// The hand reader against serde_json with `float_roundtrip` on every committed list: the same tree, every string equal and every number the same double, bit for bit.
+#[test]
+fn the_reader_reads_every_number_of_the_corpus_as_serde_json_with_float_roundtrip_does() {
+    use forme::read::{self, Value as Ours};
+    fn same(theirs: &Value, ours: &Ours, at: &str, numbers: &mut usize) {
+        match (theirs, ours) {
+            (Value::Null, Ours::Null) => {}
+            (Value::Bool(a), Ours::Bool(b)) => assert_eq!(a, b, "{at}"),
+            (Value::Number(a), Ours::Num(b)) => {
+                assert_eq!(a.as_f64().unwrap().to_bits(), b.to_bits(), "{at}: {a} read as {b:?}");
+                *numbers += 1;
+            }
+            (Value::String(a), Ours::Str(b)) => assert_eq!(a, b, "{at}"),
+            (Value::Array(a), Ours::Array(b)) => {
+                assert_eq!(a.len(), b.len(), "{at}");
+                for (i, (x, y)) in a.iter().zip(b).enumerate() {
+                    same(x, y, &format!("{at}/{i}"), numbers);
+                }
+            }
+            (Value::Object(a), Ours::Object(b)) => {
+                assert_eq!(a.len(), b.len(), "{at}");
+                for (k, y) in b {
+                    same(&a[k], y, &format!("{at}/{k}"), numbers);
+                }
+            }
+            _ => panic!("{at}: {theirs} read as {ours:?}"),
+        }
+    }
+    let mut numbers = 0;
+    for (name, _) in corpus() {
+        let text = text_of(&name);
+        same(&serde_json::from_str(&text).unwrap(), &read::parse(&text).unwrap(), &name, &mut numbers);
+    }
+    assert!(numbers > 50_000, "every number of the corpus: {numbers}");
+}
+
+/// Every committed list cut short, and every struct key of it renamed in turn at its first place, is refused by `parse` with a sentence, and nothing panics.
+#[test]
+fn every_list_cut_short_or_with_a_field_renamed_is_refused() {
+    /// The object keys that name a struct's field, at their first place, as the path of keys and indices that reaches each; the members of the list's maps (`coords`, `forms`, the integer-keyed tables, an attribute object) are data, not fields.
+    fn fields(value: &Value, path: &mut Vec<String>, seen: &mut Vec<String>, out: &mut Vec<Vec<String>>) {
+        let map = matches!(path.last().map(String::as_str), Some("coords" | "forms" | "images" | "rasters" | "emoji")) || (path.len() >= 2 && path[path.len() - 2] == "attributes");
+        match value {
+            Value::Object(members) => {
+                for (k, v) in members {
+                    if !map && !seen.contains(k) {
+                        seen.push(k.clone());
+                        out.push([path.as_slice(), std::slice::from_ref(k)].concat());
+                    }
+                    path.push(k.clone());
+                    fields(v, path, seen, out);
+                    path.pop();
+                }
+            }
+            Value::Array(items) => {
+                for (i, v) in items.iter().enumerate() {
+                    path.push(i.to_string());
+                    fields(v, path, seen, out);
+                    path.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+    fn rename(value: &mut Value, path: &[String]) {
+        match (value, path) {
+            (Value::Object(members), [last]) => {
+                let v = members.remove(last).unwrap();
+                members.insert(format!("{last}X"), v);
+            }
+            (Value::Object(members), [first, rest @ ..]) => rename(members.get_mut(first).unwrap(), rest),
+            (Value::Array(items), [first, rest @ ..]) => rename(&mut items[first.parse::<usize>().unwrap()], rest),
+            _ => unreachable!(),
+        }
+    }
+    let mut refused = 0;
+    for (name, _) in corpus() {
+        let text = text_of(&name);
+        let text = text.trim_end();
+        let cuts = (0..256).map(|k| k * text.len() / 256).chain(text.len().saturating_sub(64)..text.len());
+        for cut in cuts.filter(|&c| text.is_char_boundary(c)) {
+            assert!(list::parse(&text[..cut]).is_err(), "{name}: cut at byte {cut} of {}", text.len());
+            refused += 1;
+        }
+        let value: Value = serde_json::from_str(text).unwrap();
+        let mut paths = Vec::new();
+        fields(&value, &mut Vec::new(), &mut Vec::new(), &mut paths);
+        for path in paths {
+            let mut renamed = value.clone();
+            rename(&mut renamed, &path);
+            let error = list::parse(&serde_json::to_string(&renamed).unwrap()).map(|_| ()).unwrap_err().message;
+            assert!(error.starts_with("forme: the display list is not the schema of version 6: at ") || (path == ["version"] && error.contains("this one is version undefined")), "{name}: {} renamed: {error}", path.join("/"));
+            refused += 1;
+        }
+    }
+    assert!(refused > 5_000, "{refused} refused");
+}
