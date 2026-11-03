@@ -18,9 +18,7 @@ sha2 = "=0.11.1"
 subsetter = "=0.2.6"
 skrifa = "=0.42.1"
 flate2 = "=1.1.10"
-
-# The readers the gate asks of the file, never linked into the writer: a PDF parser that is not pdf-writer, so a test reads the file as a reader would.
-[dev-dependencies]
+hayro-write = "=0.7.0"
 hayro-syntax = { version = "=0.7.2", default-features = false, features = ["std"] }
 
 # The module's size is measured under this profile: `cargo rustc --lib --profile wasm --target wasm32-unknown-unknown --crate-type cdylib`. cargo performs no LTO on a library whose crate types include `rlib`, so `cargo build --lib` builds the module without it.
@@ -32,7 +30,9 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
-# skrifa and write-fonts are forme's copies of 0.42.1 and 0.48.1 under vendor/, changed so code forme never runs does not link (NOTICE says what changed and why).
+# skrifa, write-fonts, hayro-write and hayro-syntax are forme's copies of 0.42.1, 0.48.1, 0.7.0 and 0.7.2 under vendor/, changed so code forme never runs does not link (NOTICE says what changed and why).
 [patch.crates-io]
 skrifa = { path = "vendor/skrifa" }
 write-fonts = { path = "vendor/write-fonts" }
+hayro-write = { path = "vendor/hayro-write" }
+hayro-syntax = { path = "vendor/hayro-syntax" }

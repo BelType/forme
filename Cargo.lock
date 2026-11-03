@@ -146,6 +146,7 @@ version = "0.1.0"
 dependencies = [
  "flate2",
  "hayro-syntax",
+ "hayro-write",
  "pdf-writer",
  "serde",
  "serde_json",
@@ -184,14 +185,21 @@ checksum = "c75ab947623ef4ccaa7acf0579edf7cbb5a73838e3839a7be73335e522f433a1"
 [[package]]
 name = "hayro-syntax"
 version = "0.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0edeafd70aa2db743de8ede8637d07ec87db05efe69cde371d03f1b185fcef27"
 dependencies = [
  "hayro-jbig2",
  "hayro-jpeg2000",
  "rustc-hash",
  "smallvec",
  "zune-jpeg",
+]
+
+[[package]]
+name = "hayro-write"
+version = "0.7.0"
+dependencies = [
+ "flate2",
+ "hayro-syntax",
+ "pdf-writer",
 ]
 
 [[package]]
