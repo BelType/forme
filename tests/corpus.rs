@@ -46,7 +46,7 @@ fn reordered(value: &Value, descending: bool) -> String {
 #[test]
 fn every_committed_list_reads_and_writes_back_to_the_same_json_value() {
     let corpus = corpus();
-    assert_eq!(corpus.len(), 14, "the fourteen lists");
+    assert_eq!(corpus.len(), 15, "the fifteen lists");
     for (name, _) in &corpus {
         let text = text_of(name);
         let original: Value = serde_json::from_str(&text).unwrap();
