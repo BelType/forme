@@ -1,7 +1,7 @@
 //! The page's content: the marked-content skeleton and the text, ported from Caster's `src/emit/textEmit.ts` (`emitRun`, `lineWrap`) and the page loop of `src/emit/structureEmit.ts`.
 //!
 //! - **The skeleton** is the list's tags: a content start is `/<Tag> <</MCID n>> BDC`, its MCIDs numbered 0, 1, 2 … in item order on each page; an artifact start is `/Artifact <</Type /T /Subtype /S>> BDC`; an end is `EMC`, closing the line open inside it first.
-//! - **A line is one text object**: `BT … ET` per `lineIndex`, wrapped in `q`, the line's `cm` and its clips, and `Q`, when it has either; a vector item closes the open line before its geometry, as the oracle does, while an image, a rectangle and the print marks do not.
+//! - **A line is one text object**: `BT … ET` per `lineIndex`, wrapped in `q`, the line's `cm` and its clips, and `Q`, when it has either; every item that paints anything but text closes the open line, the next run opening a new one, and a page end closes it too.
 //! - **A vector item** is [`crate::vectors`]'s, painted as an artifact when it sits in an artifact's marked content, its names recorded into the page's scope.
 //! - **A run is `Tf`, `rg`, `Tc`, `Tm` and one `TJ`**: each segment's glyphs as one hex string of CIDs, a space glyph where DOM whitespace separated two segments, and between them the number that moves the pen to where the browser put the next. The pen is tracked in the renderer's terms, the `/W` entry plus `Tc` per glyph, and every glyph whose shaped advance differs from its `/W` entry by more than [`KERN_EPSILON`] thousandths carries the difference as its own adjustment.
 //! - **An image** is `imageOperators`: `q`, its clip at the list's numbers with `W n`, the `cm` that puts the unit square on the painted rectangle, `/Im<n> Do`, `Q`; the page names each XObject it paints, and the use is recorded. A facsimile's form is drawn in its own units, so its `cm` is scaled down to the unit square first (`formSize`).
@@ -67,6 +67,10 @@ pub fn pages(list: &DisplayList, fonts: &[Embedded], images: &Images, mut colour
         // Whether the item being written sits in an artifact's marked content, for the paint record.
         let mut artifact = false;
         for (at, item) in page.items.iter().enumerate() {
+            // Only text-object operators may sit inside `BT … ET` (ISO 32000-2, 9.4), so every item that paints anything but text closes the open line, as a line end does, and the next run opens a new one as a fresh line would.
+            if !matches!(item, Item::TagStart(_) | Item::TagEnd(_) | Item::Text(_) | Item::Link(_)) {
+                close_line(&mut c, &mut open);
+            }
             match item {
                 Item::TagEnd(_) => {
                     close_line(&mut c, &mut open);
@@ -113,9 +117,7 @@ pub fn pages(list: &DisplayList, fonts: &[Embedded], images: &Images, mut colour
                 Item::Raster(_) => return Err(Refusal::at(format!("forme: item {at} of page {} is a colour-cluster raster, which forme does not write; the colour-cluster road is dormant in print()", p + 1), p, at)),
                 // Not painted: the structure tree writes a link's annotation.
                 Item::Link(_) => {}
-                // A path may not sit inside a text object, so a vector item closes the open line first, as the oracle's page loop does; an image, a rectangle and the marks do not.
                 Item::Group(_) | Item::Path(_) | Item::Form(_) | Item::RasterFallback(_) => {
-                    close_line(&mut c, &mut open);
                     let node = match item {
                         Item::Group(x) => Node::Group(x),
                         Item::Path(x) => Node::Path(x),
@@ -125,7 +127,6 @@ pub fn pages(list: &DisplayList, fonts: &[Embedded], images: &Images, mut colour
                     };
                     vectors.item(&mut c, node, &mut scope, artifact)?;
                 }
-                // An image does not close the open line, as in the oracle's loop (stage 3's finding, unruled).
                 Item::Image(image) => match images.of_source.get(&(image.source.0 as u32)) {
                     Some(&at_x) => {
                         let x = &images.xobjects[at_x];
@@ -137,7 +138,6 @@ pub fn pages(list: &DisplayList, fonts: &[Embedded], images: &Images, mut colour
                     }
                     None => return Err(Refusal::at(format!("forme: the image at item {at} of page {} names source {}, which no XObject was made for", p + 1, crate::content::js_string(image.source.0)), p, at)),
                 },
-                // A rectangle and the marks do not close the open line, as in the oracle's loop (stage 3's finding, unruled).
                 Item::Rect(rect) => {
                     let ops = match colour.as_deref_mut() {
                         Some(k) => k.rect(rect)?,
@@ -151,6 +151,8 @@ pub fn pages(list: &DisplayList, fonts: &[Embedded], images: &Images, mut colour
                 },
             }
         }
+        // A page end closes an open line too.
+        close_line(&mut c, &mut open);
         counts.mcids.push(mcids);
         out.push(PageContent { bytes: c.finish(), xobjects, scope });
     }

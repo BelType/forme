@@ -557,3 +557,54 @@ fn every_list_cut_short_or_with_a_field_renamed_is_refused() {
     }
     assert!(refused > 5_000, "{refused} refused");
 }
+
+/// Caster's hand-made list of `test/textLine.test.ts`, made the same way: the photo list with an image and a rectangle between two runs of line 0, and a run after the page's last tag end. No committed list reaches either case.
+fn interrupted() -> (DisplayList, list::Blobs) {
+    let mut value: Value = serde_json::from_str(&text_of("photo")).unwrap();
+    let items = value["pages"][0]["items"].as_array_mut().unwrap();
+    let (run, mut image, mut last) = (items[1].clone(), items[6].clone(), items[10].clone());
+    image["transform"] = serde_json::json!([20, 0, 0, 20, 300, 265]);
+    let rect = serde_json::json!({ "kind": "shape", "owner": run["owner"], "rect": [34, 262, 120, 1.5], "fill": { "rgb": [0.8, 0, 0.2] } });
+    items.splice(2..2, [image, rect, run]);
+    last["lineIndex"] = serde_json::json!(last["lineIndex"].as_f64().unwrap() + 1.0);
+    last["baseline"] = serde_json::json!(last["baseline"].as_f64().unwrap() - 16.5);
+    items.push(last);
+    for element in value["structure"]["elements"].as_array_mut().unwrap() {
+        for child in element["children"].as_array_mut().unwrap() {
+            if let Some(item) = child.get("item").and_then(Value::as_u64).filter(|&i| i >= 2) {
+                child["item"] = serde_json::json!(item + 3);
+            }
+        }
+    }
+    let list = list::parse(&value.to_string()).unwrap();
+    let blobs = read_blobs(&list, &lists().join("blobs")).unwrap();
+    (list, blobs)
+}
+
+/// A line's text object holds text and nothing else (ISO 32000-2, 9.4 and figure 9): an image and a rectangle between two runs of one line close it, the next run reopens it, and a page end closes it. The file against the oracle's is Caster's comparator.
+#[test]
+fn a_non_text_item_and_a_page_end_close_the_open_line() {
+    const IN_TEXT: &[&str] = &["w", "J", "j", "M", "d", "ri", "i", "gs", "CS", "cs", "SC", "SCN", "sc", "scn", "G", "g", "RG", "rg", "K", "k", "Tc", "Tw", "Tz", "TL", "Tf", "Tr", "Ts", "Td", "TD", "Tm", "T*", "Tj", "TJ", "'", "\"", "BDC", "BMC", "EMC", "MP", "DP"];
+    let (list, blobs) = interrupted();
+    let written = write(&list, &blobs).unwrap();
+    let pdf = hayro_syntax::Pdf::new(written.bytes).unwrap();
+    let mut ops: Vec<String> = Vec::new();
+    let mut iter = pdf.pages()[0].operations();
+    while let Some(i) = iter.next() {
+        ops.push(String::from_utf8_lossy(i.operator).into_owned());
+    }
+    let mut in_text = false;
+    for (at, op) in ops.iter().enumerate() {
+        match op.as_str() {
+            "BT" => { assert!(!in_text, "BT inside BT at {at}"); in_text = true; }
+            "ET" => { assert!(in_text, "ET outside BT at {at}"); in_text = false; }
+            other => assert!(!in_text || IN_TEXT.contains(&other), "{other} inside BT … ET at {at}"),
+        }
+    }
+    assert!(!in_text, "the page ends inside BT … ET");
+    assert_eq!(ops.iter().filter(|o| *o == "BT").count(), 7);
+    let et = ops.iter().position(|o| o == "ET").unwrap();
+    let bt = et + ops[et..].iter().position(|o| o == "BT").unwrap();
+    assert_eq!(&ops[et..=bt], ["ET", "q", "cm", "Do", "Q", "q", "rg", "re", "f", "Q", "BT"]);
+    assert_eq!(written.records.pens.len(), 7);
+}
