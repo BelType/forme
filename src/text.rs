@@ -95,8 +95,8 @@ pub fn pages(list: &DisplayList, fonts: &[Embedded], partial: bool) -> Result<(V
                     counts.pens.push(Pen { page: p, item: at, adjustments });
                 }
                 Item::Raster(_) => return Err(Refusal::at(format!("forme: item {at} of page {} is a colour-cluster raster, which forme does not write; the colour-cluster road is dormant in print()", p + 1), p, at)),
-                // Not painted: the structure tree collects a link (stage 4).
-                Item::Link(_) => left_out.push("link"),
+                // Not painted: the structure tree writes a link's annotation.
+                Item::Link(_) => {}
                 // A path may not sit inside a text object, so a vector item closes the open line first, as the oracle's page loop does; an image, a rectangle and the marks do not.
                 Item::Group(_) | Item::Path(_) | Item::Form(_) | Item::RasterFallback(_) => {
                     close_line(&mut c, &mut open);

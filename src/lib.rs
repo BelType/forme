@@ -1,11 +1,12 @@
 //! forme: a PDF 2.0 writer that reads Caster's display list and nothing else, held to the files Caster's TypeScript writer prints from the same lists (*the same list prints the same bytes*, Caster's DESIGN.md S102).
 //!
-//! The whole API is [`write`]: a list and its blobs in, the file out, or a [`Refusal`] in a sentence. The list's schema is [`list`], its refusals before a byte are [`validate`], the content-stream writer is [`content`], the fonts are [`fonts`] and the page's marked content and text are [`text`]. The writer writes the document's scaffolding (the header, the catalog with `/Version /2.0`, `/Lang` and `/DisplayDocTitle`, every page with its boxes, every font instance as `F0`, `F1`, … in its resources and its content stream, the Info dictionary, the XMP packet and the trailer `/ID`), every font instance's objects, and each page's marked content and text; it returns the `mcids`, `pens`, `kernAdjustments`, `actualTextSpans` and `faces` records beside the bytes, and refuses by name every item kind it does not write yet and a list with a colour story; [`write_partial`] leaves those out instead and says which, for the stage gates only, and goes when nothing is left out.
+//! The whole API is [`write`]: a list and its blobs in, the file out, or a [`Refusal`] in a sentence. The list's schema is [`list`], its refusals before a byte are [`validate`], the content-stream writer is [`content`], the fonts are [`fonts`], the page's marked content and text are [`text`], and the structure tree and what points into it are [`tree`]. The writer writes the document's scaffolding (the header, the catalog with `/Version /2.0`, `/Lang`, `/DisplayDocTitle`, `/StructTreeRoot`, `/MarkInfo`, `/Outlines` and `/PageLabels`, every page with its boxes, `/Tabs /S`, `/StructParents` and its link annotations, every font instance as `F0`, `F1`, … in its resources and its content stream, the Info dictionary, the XMP packet and the trailer `/ID`), every font instance's objects, each page's marked content and text, and the tree; it returns the `mcids`, `pens`, `kernAdjustments`, `actualTextSpans` and `faces` records beside the bytes, and refuses by name every item kind it does not write yet and a list with a colour story; [`write_partial`] leaves those out instead and says which, for the stage gates only, and goes when nothing is left out.
 
 pub mod content;
 pub mod fonts;
 pub mod list;
 pub mod text;
+pub mod tree;
 pub mod validate;
 
 use std::collections::BTreeMap;
@@ -125,16 +126,27 @@ fn write_with(list: &DisplayList, blobs: &Blobs, partial: bool) -> Result<(Writt
         }
     }
 
+    let page_refs: Vec<Ref> = page_ids.iter().map(|&(page, _)| page).collect();
+    let tree = tree::write(&mut pdf, &mut next, list, &page_refs, &counts.mcids)?;
+
     let mut catalog = pdf.catalog(catalog_id);
     catalog.pages(pages_id);
     catalog.lang(TextStr(&list.info.lang));
     catalog.viewer_preferences().display_doc_title(true);
     catalog.metadata(xmp_id);
     catalog.pair(Name(b"Version"), Name(b"2.0"));
+    catalog.pair(Name(b"StructTreeRoot"), tree.root);
+    catalog.mark_info().marked(true);
+    if let Some(outlines) = tree.outlines {
+        catalog.pair(Name(b"Outlines"), outlines);
+    }
+    if let Some(labels) = tree.page_labels {
+        catalog.pair(Name(b"PageLabels"), labels);
+    }
     catalog.finish();
 
     pdf.pages(pages_id).kids(page_ids.iter().map(|&(page, _)| page)).count(page_ids.len() as i32);
-    for ((page, &(page_id, content_id)), content) in list.pages.iter().zip(&page_ids).zip(&contents) {
+    for (index, ((page, &(page_id, content_id)), content)) in list.pages.iter().zip(&page_ids).zip(&contents).enumerate() {
         let mut writer = pdf.page(page_id);
         writer.parent(pages_id).media_box(rect(&page.boxes.media));
         if let Some(trim) = &page.boxes.trim {
@@ -152,6 +164,12 @@ fn write_with(list: &DisplayList, blobs: &Blobs, partial: bool) -> Result<(Writt
         fonts.finish();
         resources.finish();
         writer.contents(content_id);
+        // `/Tabs /S` on every page, as the oracle's `setupPages` sets it: tab order follows the structure tree. `/StructParents` is the page's key in the ParentTree.
+        writer.pair(Name(b"Tabs"), Name(b"S"));
+        writer.pair(Name(b"StructParents"), index as i32);
+        if !tree.annots[index].is_empty() {
+            writer.insert(Name(b"Annots")).array().items(tree.annots[index].iter().copied());
+        }
         writer.finish();
         pdf.stream(content_id, &fonts::deflate(&content.bytes)).filter(pdf_writer::Filter::FlateDecode);
     }
