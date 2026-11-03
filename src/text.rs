@@ -2,6 +2,7 @@
 //!
 //! - **The skeleton** is the list's tags: a content start is `/<Tag> <</MCID n>> BDC`, its MCIDs numbered 0, 1, 2 … in item order on each page; an artifact start is `/Artifact <</Type /T /Subtype /S>> BDC`; an end is `EMC`, closing the line open inside it first.
 //! - **A line is one text object**: `BT … ET` per `lineIndex`, wrapped in `q`, the line's `cm` and its clips, and `Q`, when it has either; a vector item closes the open line before its geometry, as the oracle does, while an image, a rectangle and the print marks do not.
+//! - **A vector item** is [`crate::vectors`]'s, painted as an artifact when it sits in an artifact's marked content, its names recorded into the page's scope.
 //! - **A run is `Tf`, `rg`, `Tc`, `Tm` and one `TJ`**: each segment's glyphs as one hex string of CIDs, a space glyph where DOM whitespace separated two segments, and between them the number that moves the pen to where the browser put the next. The pen is tracked in the renderer's terms, the `/W` entry plus `Tc` per glyph, and every glyph whose shaped advance differs from its `/W` entry by more than [`KERN_EPSILON`] thousandths carries the difference as its own adjustment.
 //! - **An image** is `imageOperators`: `q`, its clip at the list's numbers with `W n`, the `cm` that puts the unit square on the painted rectangle, `/Im<n> Do`, `Q`; the page names each XObject it paints, and the use is recorded. A facsimile is stage 8's.
 //! - **`/ActualText`**: an occurrence of a glyph that stands for other text than the ToUnicode map gives it is wrapped in `/Span <</ActualText <FEFF…> >> BDC … EMC`, the array closed before it and opened after.
@@ -15,7 +16,8 @@ use crate::colour::{Colour, PaintOps};
 use crate::content::{Content, Operand, round3};
 use crate::fonts::{Embedded, segments};
 use crate::images::{ImageUse, Images};
-use crate::list::{ArtifactType, ClipPath, DisplayList, FillRule, ImageItem, Item, Matrix, Num, PathSegment, RectItem, TagStart, TextItem};
+use crate::list::{ArtifactType, ClipPath, DisplayList, ImageItem, Item, Matrix, Num, PathSegment, RectItem, TagStart, TextItem};
+use crate::vectors::{Node, Scope, Vectors, clip_operators};
 
 /// The largest gap, in thousandths of an em, between the shaped advance and the `/W` entry that is rounding rather than a kern, the oracle's `KERN_EPSILON`.
 pub const KERN_EPSILON: f64 = 2.0;
@@ -45,6 +47,8 @@ pub struct PageContent {
     pub bytes: Vec<u8>,
     /// Each XObject the page paints, by its resource name, in the order of first use.
     pub xobjects: Vec<(String, Ref)>,
+    /// The vector items' resources: shadings, patterns, graphics states and form and raster XObjects.
+    pub scope: Scope,
     pub left_out: Vec<&'static str>,
 }
 
@@ -52,7 +56,7 @@ pub struct PageContent {
 ///
 /// # Errors
 /// A colour-cluster item, which forme refuses by name (the plan's rulings); a content start naming no element, in the oracle's sentence; and, unless `partial`, every item kind this stage does not write.
-pub fn pages(list: &DisplayList, fonts: &[Embedded], images: &Images, mut colour: Option<&mut Colour>, partial: bool) -> Result<(Vec<PageContent>, Counts), Refusal> {
+pub fn pages(list: &DisplayList, fonts: &[Embedded], images: &Images, mut colour: Option<&mut Colour>, vectors: &mut Vectors, partial: bool) -> Result<(Vec<PageContent>, Counts), Refusal> {
     let mut counts = Counts::default();
     let mut out = Vec::new();
     for (p, page) in list.pages.iter().enumerate() {
@@ -60,13 +64,17 @@ pub fn pages(list: &DisplayList, fonts: &[Embedded], images: &Images, mut colour
         let mut mcids = Vec::new();
         let mut left_out = Vec::new();
         let mut xobjects: Vec<(String, Ref)> = Vec::new();
+        let mut scope = Scope::default();
         let mut open: Option<&TextItem> = None;
         let mut open_index = f64::NAN;
+        // Whether the item being written sits in an artifact's marked content, for the paint record.
+        let mut artifact = false;
         for (at, item) in page.items.iter().enumerate() {
             match item {
                 Item::TagEnd(_) => {
                     close_line(&mut c, &mut open);
                     c.op(&[], "EMC");
+                    artifact = false;
                 }
                 Item::TagStart(start) => match &start.start {
                     TagStart::Artifact(a) => {
@@ -80,6 +88,7 @@ pub fn pages(list: &DisplayList, fonts: &[Embedded], images: &Images, mut colour
                             None => format!("<</Type /{ty}>>"),
                         };
                         c.op(&[Operand::Name("Artifact"), Operand::Raw(&props)], "BDC");
+                        artifact = true;
                     }
                     TagStart::Content(start) => {
                         let elements = &list.structure.elements;
@@ -87,6 +96,7 @@ pub fn pages(list: &DisplayList, fonts: &[Embedded], images: &Images, mut colour
                         let props = format!("<</MCID {}>>", mcids.len());
                         mcids.push(at);
                         c.op(&[Operand::Name(&element.element_type), Operand::Raw(&props)], "BDC");
+                        artifact = false;
                     }
                 },
                 Item::Text(text) => {
@@ -109,7 +119,14 @@ pub fn pages(list: &DisplayList, fonts: &[Embedded], images: &Images, mut colour
                 // A path may not sit inside a text object, so a vector item closes the open line first, as the oracle's page loop does; an image, a rectangle and the marks do not.
                 Item::Group(_) | Item::Path(_) | Item::Form(_) | Item::RasterFallback(_) => {
                     close_line(&mut c, &mut open);
-                    left_out.push(item.kind());
+                    let node = match item {
+                        Item::Group(x) => Node::Group(x),
+                        Item::Path(x) => Node::Path(x),
+                        Item::Form(x) => Node::Form(x),
+                        Item::RasterFallback(x) => Node::Raster(x),
+                        _ => unreachable!("matched above"),
+                    };
+                    vectors.item(&mut c, node, &mut scope, artifact)?;
                 }
                 // An image does not close the open line, as in the oracle's loop (stage 3's finding, unruled).
                 Item::Image(image) => match images.of_source.get(&(image.source.0 as u32)) {
@@ -142,7 +159,7 @@ pub fn pages(list: &DisplayList, fonts: &[Embedded], images: &Images, mut colour
             }
         }
         counts.mcids.push(mcids);
-        out.push(PageContent { bytes: c.finish(), xobjects, left_out });
+        out.push(PageContent { bytes: c.finish(), xobjects, scope, left_out });
     }
     Ok((out, counts))
 }
@@ -212,17 +229,7 @@ fn line_open(c: &mut Content, chain: Option<&Matrix>, clips: &[ClipPath]) {
         c.op(&m.map(|n| Operand::Num(n.0)), "cm");
     }
     for clip in clips {
-        let n = |p: &[Num; 2]| [Operand::Num(round3(p[0].0)), Operand::Num(round3(p[1].0))];
-        for segment in &clip.path {
-            match segment {
-                PathSegment::Move { to } => c.op(&n(to), "m"),
-                PathSegment::Line { to } => c.op(&n(to), "l"),
-                PathSegment::Curve { c1, c2, to } => c.op(&[n(c1), n(c2), n(to)].concat(), "c"),
-                PathSegment::Close => c.op(&[], "h"),
-            };
-        }
-        c.op(&[], if clip.rule == FillRule::Evenodd { "W*" } else { "W" });
-        c.op(&[], "n");
+        clip_operators(c, &clip.path, clip.rule);
     }
 }
 

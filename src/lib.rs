@@ -1,6 +1,6 @@
 //! forme: a PDF 2.0 writer that reads Caster's display list and nothing else, held to the files Caster's TypeScript writer prints from the same lists (*the same list prints the same bytes*, Caster's DESIGN.md S102).
 //!
-//! The whole API is [`write`]: a list and its blobs in, the file out, or a [`Refusal`] in a sentence. The list's schema is [`list`], its refusals before a byte are [`validate`], the content-stream writer is [`content`], the fonts are [`fonts`], the image XObjects are [`images`], the colour story is [`colour`], the page's marked content, text, images, rectangles and print marks are [`text`], and the structure tree and what points into it are [`tree`]. The writer writes the document's scaffolding (the header, the catalog with `/Version /2.0`, `/Lang`, `/DisplayDocTitle`, `/StructTreeRoot`, `/MarkInfo`, `/Outlines` and `/PageLabels`, every page with its boxes, `/Tabs /S`, `/StructParents` and its link annotations, every font instance as `F0`, `F1`, … in its resources and its content stream, the Info dictionary, the XMP packet and the trailer `/ID`), every font instance's objects, every image XObject the list's images and raster fallbacks make (each page naming those it paints), each page's marked content, text, images, rectangles and print marks, the colour story (the output intent, `/DefaultRGB`, the separations and the overprint states), and the tree; it returns the `mcids`, `pens`, `kernAdjustments`, `actualTextSpans`, `faces`, `images`, `xobjects` and `colour` records beside the bytes, and refuses by name every item kind it does not write yet; [`write_partial`] leaves those out instead and says which, for the stage gates only, and goes when nothing is left out.
+//! The whole API is [`write`]: a list and its blobs in, the file out, or a [`Refusal`] in a sentence. The list's schema is [`list`], its refusals before a byte are [`validate`], the content-stream writer is [`content`], the fonts are [`fonts`], the image XObjects are [`images`], the colour story is [`colour`], the vector items are [`vectors`], the page's marked content, text, images, rectangles and print marks are [`text`], and the structure tree and what points into it are [`tree`]. The writer writes the document's scaffolding (the header, the catalog with `/Version /2.0`, `/Lang`, `/DisplayDocTitle`, `/StructTreeRoot`, `/MarkInfo`, `/Outlines` and `/PageLabels`, every page with its boxes, `/Tabs /S`, `/StructParents` and its link annotations, every font instance as `F0`, `F1`, … in its resources and its content stream, the Info dictionary, the XMP packet and the trailer `/ID`), every font instance's objects, every image XObject the list's images and raster fallbacks make (each page naming those it paints), each page's marked content, text, images, rectangles, print marks and vector items (paths, shadings, patterns, graphics states, groups, forms and raster fallbacks), the colour story (the output intent, `/DefaultRGB`, the separations and the overprint states), and the tree; it returns the `mcids`, `pens`, `kernAdjustments`, `actualTextSpans`, `faces`, `images`, `xobjects`, `paint`, `vectorResources` and `colour` records beside the bytes, and refuses by name the one item kind it does not write yet, the facsimile; [`write_partial`] leaves those out instead and says which, for the stage gates only, and goes when nothing is left out.
 
 pub mod colour;
 pub mod content;
@@ -10,6 +10,7 @@ pub mod list;
 pub mod text;
 pub mod tree;
 pub mod validate;
+pub mod vectors;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -75,9 +76,20 @@ pub struct Records {
     pub images: Vec<images::ImageUse>,
     /// How many distinct image XObjects the file holds, the raster fallbacks' included, by the dedupe rule.
     pub xobjects: usize,
+    /// One row per vector node painted, in painting order: Caster's `ReportPaint`, as JSON text.
+    #[serde(serialize_with = "raw_json")]
+    pub paint: String,
+    /// How many shadings, patterns, graphics states and transparency-group forms the vectors made, as JSON text.
+    #[serde(serialize_with = "raw_json")]
+    pub vector_resources: String,
     /// The colour record, when the list has a colour story.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub colour: Option<colour::Record>,
+}
+
+/// A record member held as JSON text, written into the records as it is.
+fn raw_json<S: serde::Serializer>(text: &str, s: S) -> Result<S::Ok, S::Error> {
+    serde::Serialize::serialize(&serde_json::value::RawValue::from_string(text.to_string()).map_err(serde::ser::Error::custom)?, s)
 }
 
 /// The item kinds a partial write left out, each with how many, in the kinds' order of first appearance.
@@ -122,7 +134,9 @@ fn write_with(list: &DisplayList, blobs: &Blobs, partial: bool) -> Result<(Writt
     let mut colour = colour::Colour::new(list, blobs)?;
     let images = images::write(&mut pdf, &mut next, list, blobs, partial)?;
     let font_names = text::font_names(&embedded);
-    let (contents, counts) = text::pages(list, &embedded, &images, colour.as_mut(), partial)?;
+    let mut vectors = vectors::Vectors::new(&mut pdf, &mut next, list, &images);
+    let (contents, counts) = text::pages(list, &embedded, &images, colour.as_mut(), &mut vectors, partial)?;
+    let (paint, vector_resources) = (format!("[{}]", vectors.paint.join(",")), vectors.counts());
     for kind in contents.iter().flat_map(|c| &c.left_out) {
         match left_out.iter_mut().find(|(k, _)| k == kind) {
             Some((_, count)) => *count += 1,
@@ -171,12 +185,28 @@ fn write_with(list: &DisplayList, blobs: &Blobs, partial: bool) -> Result<(Writt
             fonts.pair(Name(name.as_bytes()), *id);
         }
         fonts.finish();
-        if !content.xobjects.is_empty() {
-            let mut xobjects = resources.x_objects();
-            for (name, id) in &content.xobjects {
-                xobjects.pair(Name(name.as_bytes()), *id);
+        // The image items' XObjects and the vector items' in one dictionary, as the oracle's `applyToPage` merges them.
+        let xobjects: Vec<_> = content.xobjects.iter().chain(content.scope.xobjects.iter().filter(|(n, _)| !content.xobjects.iter().any(|(m, _)| m == n))).collect();
+        if !xobjects.is_empty() {
+            let mut dict = resources.x_objects();
+            for (name, id) in xobjects {
+                dict.pair(Name(name.as_bytes()), *id);
             }
-            xobjects.finish();
+            dict.finish();
+        }
+        if !content.scope.shadings.is_empty() {
+            let mut dict = resources.shadings();
+            for (name, id) in &content.scope.shadings {
+                dict.pair(Name(name.as_bytes()), *id);
+            }
+            dict.finish();
+        }
+        if !content.scope.patterns.is_empty() {
+            let mut dict = resources.patterns();
+            for (name, id) in &content.scope.patterns {
+                dict.pair(Name(name.as_bytes()), *id);
+            }
+            dict.finish();
         }
         // `/DefaultRGB` on every page, and every separation and overprint state the document allocated, as the oracle's `ensurePageResources`.
         if let Some((names, _, _)) = &colour {
@@ -186,13 +216,15 @@ fn write_with(list: &DisplayList, blobs: &Blobs, partial: bool) -> Result<(Writt
                 spaces.pair(Name(name.as_bytes()), *id);
             }
             spaces.finish();
-            if !names.states.is_empty() {
-                let mut states = resources.ext_g_states();
-                for (name, id) in &names.states {
-                    states.pair(Name(name.as_bytes()), *id);
-                }
-                states.finish();
+        }
+        // One `/ExtGState` per page: the colour story's overprint states, every one on every page, and the vector items' `GT<n>` where the page uses them.
+        let colour_states = colour.as_ref().map_or(&[][..], |(names, _, _)| &names.states[..]);
+        if !colour_states.is_empty() || !content.scope.ext_g_states.is_empty() {
+            let mut states = resources.ext_g_states();
+            for (name, id) in colour_states.iter().chain(&content.scope.ext_g_states) {
+                states.pair(Name(name.as_bytes()), *id);
             }
+            states.finish();
         }
         resources.finish();
         writer.contents(content_id);
@@ -220,7 +252,7 @@ fn write_with(list: &DisplayList, blobs: &Blobs, partial: bool) -> Result<(Writt
     // ISO 32000-2 §7.5.5 requires an `/ID` of every PDF 2.0 file, and the oracle writes none: both entries are the first 16 bytes of a SHA-256 over the file as written up to the cross-reference table, so the identifier is a function of the list.
     let id = Sha256::digest(pdf.as_bytes())[..16].to_vec();
     pdf.set_file_id((id.clone(), id));
-    Ok((Written { bytes: pdf.finish(), records: Records { mcids: counts.mcids, pens: counts.pens, kern_adjustments: counts.kern_adjustments, actual_text_spans: counts.actual_text_spans, faces, images: counts.images, xobjects: images.xobjects.len(), colour: colour.map(|(_, _, record)| record) } }, left_out))
+    Ok((Written { bytes: pdf.finish(), records: Records { mcids: counts.mcids, pens: counts.pens, kern_adjustments: counts.kern_adjustments, actual_text_spans: counts.actual_text_spans, faces, images: counts.images, xobjects: images.xobjects.len(), paint, vector_resources, colour: colour.map(|(_, _, record)| record) } }, left_out))
 }
 
 /// A box of the list as pdf-writer's rectangle, whose reals are `f32`.
