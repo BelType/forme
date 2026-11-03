@@ -233,3 +233,26 @@ fn the_page_loop_records_every_run_and_content_start_and_refuses_a_colour_story_
         }
     }
 }
+
+/// The tree's page entries on every list, read back by hayro-syntax: `/Tabs /S` and `/StructParents` on every page, and as many link annotations on each as the list has link items; and two elements with one `/ID` refused in the oracle's sentence. The tree element by element against the oracle's is Caster's `npm run identity -- compare`.
+#[test]
+fn every_page_points_into_the_tree_and_two_elements_with_one_id_are_refused() {
+    use hayro_syntax::object::{Array, Name};
+    for (name, _) in corpus() {
+        let (list, blobs) = list_of(&name);
+        let bytes = write_partial(&list, &blobs).unwrap_or_else(|r| panic!("{name}: {r}")).0.bytes;
+        let pdf = hayro_syntax::Pdf::new(bytes).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        for (index, (page, listed)) in pdf.pages().iter().zip(&list.pages).enumerate() {
+            let raw = page.raw();
+            assert_eq!(raw.get::<Name>(b"Tabs").as_deref(), Some(b"S".as_slice()), "{name}: /Tabs /S on page {index}");
+            assert_eq!(raw.get::<i64>(b"StructParents"), Some(index as i64), "{name}: /StructParents of page {index}");
+            let links = listed.items.iter().filter(|i| matches!(i, Item::Link(_))).count();
+            assert_eq!(raw.get::<Array>(b"Annots").map_or(0, |a| a.iter::<hayro_syntax::object::Dict>().count()), links, "{name}: the link annotations of page {index}");
+        }
+    }
+    let (mut list, blobs) = list_of("paper");
+    let ids: Vec<usize> = list.structure.elements.iter().enumerate().filter(|(_, e)| e.id.is_some()).map(|(i, _)| i).collect();
+    list.structure.elements[ids[1]].id = list.structure.elements[ids[0]].id.clone();
+    let id = list.structure.elements[ids[0]].id.clone().unwrap();
+    assert_eq!(write_partial(&list, &blobs).unwrap_err().message, format!("caster: two elements carry the /ID {}", serde_json::to_string(&id).unwrap()));
+}
