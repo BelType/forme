@@ -1,6 +1,6 @@
 //! The vector items, ported from Caster's `src/vectors/vectorEmit.ts`, `shading.ts` and `transparency.ts`: measured geometry in, content-stream operators out.
 //!
-//! - **A path** is its graphics state, then a flat fill as `f` or `f*`, a flat stroke as `w J j M d` and `S`, both as `B` or `B*`, and `paint-order: stroke` as the path twice, stroked and then filled. A gradient fill is `q`, the path, `W n`, the gradient's `cm` and `sh`, `Q`; its alpha stops are a `/DeviceGray` shading in a transparency group that an `/SMask` reads. A gradient stroke is `/Pattern CS /Pn SCN` over a type 2 pattern whose `/Matrix` is the gradient's.
+//! - **A path** is its graphics state, then a flat fill as `f` or `f*`, a flat stroke as `w J j M d` and `S`, both as `B` or `B*` (or, with a stroke alpha below one, the path filled and then stroked, since `B` is a knockout group), and `paint-order: stroke` as the path twice, stroked and then filled. A gradient fill is `q`, the path, `W n`, the gradient's `cm` and `sh`, `Q`; its alpha stops are a `/DeviceGray` shading in a transparency group that an `/SMask` reads. A gradient stroke is `/Pattern CS /Pn SCN` over a type 2 pattern whose `/Matrix` is the gradient's.
 //! - **A shading** is `/ShadingType 2` or `3` over a `/FunctionType 3` stitching function of type 2 segments, its `/Domain` the stops' own range, a hard stop nudged by a millionth of the domain; colours at [`round4`], the domain and bounds at [`round6`]; one object per distinct gradient, `Sh0`, `Sh1`, … in first-use order, and `P0`, `P1`, … for patterns.
 //! - **A graphics state** is one `/ExtGState` per distinct `/ca`, `/CA`, `/BM` and `/SMask`, `GT0`, `GT1`, … so as not to meet the colour story's `GS<n>`, with `/SMask /None` where it sets alpha or a blend but no mask.
 //! - **An isolated group and a soft mask** are transparency-group forms, `Fm0`, `Fm1`, … each its own; **a form item** is a plain form written once per key, `Fx0`, `Fx1`, … and drawn with its matrix wherever it is named; **a raster fallback** is the image XObject the images made, placed by its `cm`.
@@ -368,6 +368,11 @@ impl<'a> Vectors<'a> {
                 c.op(&[], "S");
                 path_operators(c, &path.path);
                 c.op(&[], fill_op);
+            } else if flat_fill.is_some() && strokes && p.stroke_opacity.is_some() {
+                // `B` paints its fill and its stroke as one knockout group (ISO 32000-2, 11.7.4.4), so a stroke that is not opaque would composite with the backdrop under the fill, not with the fill; the path is filled and then stroked.
+                c.op(&[], fill_op);
+                path_operators(c, &path.path);
+                c.op(&[], "S");
             } else if flat_fill.is_some() && strokes {
                 c.op(&[], if even { "B*" } else { "B" });
             } else if flat_fill.is_some() {
