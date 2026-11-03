@@ -427,8 +427,10 @@ impl<'a> Vectors<'a> {
             Some((form, ty, bc)) => {
                 let mut m = d.insert(Name(b"SMask")).dict();
                 m.pair(Name(b"Type"), Name(b"Mask")).pair(Name(b"S"), Name(ty.as_bytes())).pair(Name(b"G"), form);
-                if let Some(bc) = bc {
-                    m.insert(Name(b"BC")).array().items(f32s(bc.iter().map(|n| n.0)));
+                // A black backdrop is the default and is not written; any other is one number per component of the mask group's `/DeviceRGB` (ISO 32000-2, Table 142), a grey one spread over the three. Egildo's ruling 18, 2026-11-03.
+                if let Some(bc) = bc.filter(|b| b.iter().any(|n| n.0 != 0.0)) {
+                    let bc: Vec<f64> = if bc.len() == 1 { vec![bc[0].0; 3] } else { bc.iter().map(|n| n.0).collect() };
+                    m.insert(Name(b"BC")).array().items(f32s(bc));
                 }
             }
             // A state that sets alpha or a blend mode but no mask says so, rather than inherit an enclosing state's mask.
