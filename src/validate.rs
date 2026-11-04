@@ -1,6 +1,6 @@
 //! The refusals of a list the writer could not write, each a sentence, before a byte is written: Caster's `validateList` (`src/displayList/validate.ts`), ported check for check, in its order, with its sentences.
 //!
-//! What it holds: the version (read first, by [`crate::list::parse`]); every blob key a resource names; each image's samples in a shape the schema names, as many bytes as it says (version 6); the font instances (unique keys, sorted widths, a width for every glyph a text item shows and every space glyph it names); under a PDF/UA-2 claim, no word gap of a face with no space glyph; every image and raster key a page item names; the marked content of each page (no end without a start, none left open); the links (`order` running 0, 1, 2 … over the document, a destination or a URI on each); the structure tree (an element index anywhere in range, one parent each, no cycle, a content child that is a content start naming its element back, every content start some element's child, a link child owned by the link's element, the attribute keys the schema names). What it leaves to the writer is what only writing finds. A number in a sentence is written as JavaScript's `String` writes it, so a sentence is the oracle's to the character.
+//! What it holds: the version (read first, by [`crate::list::parse`]); every blob key a resource names; each image's samples in a shape the schema names, as many bytes as it says (version 6; `DeviceCMYK` at four components and with neither palette nor profile, version 7); the font instances (unique keys, sorted widths, a width for every glyph a text item shows and every space glyph it names); under a PDF/UA-2 claim, no word gap of a face with no space glyph; every image and raster key a page item names; the marked content of each page (no end without a start, none left open); the links (`order` running 0, 1, 2 … over the document, a destination or a URI on each); the structure tree (an element index anywhere in range, one parent each, no cycle, a content child that is a content start naming its element back, every content start some element's child, a link child owned by the link's element, the attribute keys the schema names). What it leaves to the writer is what only writing finds. A number in a sentence is written as JavaScript's `String` writes it, so a sentence is the oracle's to the character.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -28,7 +28,7 @@ pub fn validate(list: &DisplayList, blobs: &Blobs) -> Result<(), Refusal> {
     check_tree(list)
 }
 
-/// Each image's samples in a shape the schema names, holding as many bytes as the shape says (version 6).
+/// Each image's samples in a shape the schema names, holding as many bytes as the shape says (version 6; `DeviceCMYK` at four components and with neither palette nor profile, version 7).
 fn check_samples(list: &DisplayList, blobs: &Blobs) -> Result<(), Refusal> {
     for (key, image) in &list.resources.images {
         let Some(s) = &image.samples else { continue };
@@ -36,13 +36,17 @@ fn check_samples(list: &DisplayList, blobs: &Blobs) -> Result<(), Refusal> {
         let bits = s.bits_per_component.0;
         let indexed = space == "Indexed";
         let palette_bytes = s.palette.as_ref().map_or(0, |p| blobs[p].len());
-        let named = matches!(space, "DeviceRGB" | "DeviceGray" | "Indexed") && (bits == 8.0 || bits == 16.0);
-        if !named || indexed != s.palette.is_some() || (indexed && (bits != 8.0 || s.icc.is_some() || palette_bytes % 3 != 0 || !(3..=768).contains(&palette_bytes))) {
+        let named = matches!(space, "DeviceRGB" | "DeviceGray" | "DeviceCMYK" | "Indexed") && (bits == 8.0 || bits == 16.0);
+        if !named || indexed != s.palette.is_some() || (indexed && (bits != 8.0 || s.icc.is_some() || palette_bytes % 3 != 0 || !(3..=768).contains(&palette_bytes)) || (space == "DeviceCMYK" && s.icc.is_some())) {
             let palette = if s.palette.is_some() { format!(" with a palette of {palette_bytes} bytes") } else { String::new() };
             let profile = if s.icc.is_some() { " with a profile" } else { "" };
             return Err(Refusal::new(format!("caster: image {key}'s samples are {space} at {} bits{palette}{profile}, a shape the schema does not name", js_string(bits))));
         }
-        let components = if space == "DeviceRGB" { 3.0 } else { 1.0 };
+        let components = match space {
+            "DeviceRGB" => 3.0,
+            "DeviceCMYK" => 4.0,
+            _ => 1.0,
+        };
         let expected = s.width.0 * s.height.0 * (components + if s.alpha { 1.0 } else { 0.0 }) * (bits / 8.0);
         let held = blobs[&s.blob].len();
         if held as f64 != expected {

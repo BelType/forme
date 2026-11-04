@@ -1,6 +1,6 @@
-//! The display list, version 6: a Caster document as plain data, in the order the writer paints it, written by hand from Caster's `src/displayList.ts`, whose TSDoc each member's doc comment carries. This module is the schema's authority on the Rust side; Caster's `displayList.ts` and `displayList/contract.ts` are the authority it follows.
+//! The display list, version 7: a Caster document as plain data, in the order the writer paints it, written by hand from Caster's `src/displayList.ts`, whose TSDoc each member's doc comment carries. This module is the schema's authority on the Rust side; Caster's `displayList.ts` and `displayList/contract.ts` are the authority it follows.
 //!
-//! Every struct is read by hand ([`crate::read`]) and refuses a field it does not name, so a field added on the JavaScript side is a parse failure here and never a silent omission, and `version` is read before anything else and refused unless it is 6 ([`parse`]). The list arrives as the JSON `JSON.stringify` makes of it with `resources.blobs` removed, which is the fixture format's list file; the blobs arrive beside it, keyed by their names ([`Blobs`]). JSON hides seven sharp edges, and each binds here:
+//! Every struct is read by hand ([`crate::read`]) and refuses a field it does not name, so a field added on the JavaScript side is a parse failure here and never a silent omission, and `version` is read before anything else and refused unless it is 7 ([`parse`]). The list arrives as the JSON `JSON.stringify` makes of it with `resources.blobs` removed, which is the fixture format's list file; the blobs arrive beside it, keyed by their names ([`Blobs`]). JSON hides seven sharp edges, and each binds here:
 //!
 //! - **Offsets are UTF-16 code units.** `text`, `segments.start` and `glyphs.clusters` count UTF-16 code units, so a text the writer writes is a [`Utf16`], the one string type that takes the lone surrogate `JSON.stringify` writes as `\udXXX` and a DOM text can hold ([`crate::read`]).
 //! - **Numbers are doubles, parsed exactly.** Rust's correctly rounded `f64::from_str` on each literal, as serde_json with `float_roundtrip` read it ([`crate::read`]), so every number is the double JavaScript parsed, and every number of the list is a [`Num`], which writes an integral value back as JSON writes it, `-0` as `0`.
@@ -153,7 +153,7 @@ literal!(TableEmoji, "emoji");
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase", deny_unknown_fields))]
 pub struct DisplayList {
-    /// 6; [`parse`] refuses any other before it reads the rest.
+    /// 7; [`parse`] refuses any other before it reads the rest.
     pub version: Num,
     pub info: DocumentInfo,
     pub writing: Writing,
@@ -195,7 +195,7 @@ impl DisplayList {
 }
 
 /// The version this module reads.
-pub const LIST_VERSION: f64 = 6.0;
+pub const LIST_VERSION: f64 = 7.0;
 
 /// Read a list from its JSON: the version first, with the validator's sentence, then the whole schema.
 ///
@@ -217,7 +217,7 @@ pub fn parse(json: &str) -> Result<DisplayList, Refusal> {
         };
         return Err(Refusal::new(format!("caster: the writer reads a display list of version {}, and this one is version {shown}; a list is written again by print(), never upgraded", crate::content::js_string(LIST_VERSION))));
     }
-    DisplayList::read(&value).map_err(|e| Refusal::new(format!("forme: the display list is not the schema of version 6: at {e}")))
+    DisplayList::read(&value).map_err(|e| Refusal::new(format!("forme: the display list is not the schema of version 7: at {e}")))
 }
 
 /// What the file says of itself.
@@ -474,7 +474,7 @@ pub struct ImageSamples {
     pub blob: String,
     pub width: Num,
     pub height: Num,
-    /// `DeviceRGB`, `DeviceGray` or `Indexed` (over `DeviceRGB`, with `palette`); a string, so the validator refuses another in its own sentence.
+    /// `DeviceRGB`, `DeviceGray`, `DeviceCMYK` (four components, never with `palette` or `icc`: the output intent is the profile, version 7) or `Indexed` (over `DeviceRGB`, with `palette`); a string, so the validator refuses another in its own sentence.
     pub color_space: String,
     /// 8 or 16; 16 never with `Indexed`.
     pub bits_per_component: Num,

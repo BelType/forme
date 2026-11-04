@@ -46,7 +46,7 @@ fn reordered(value: &Value, descending: bool) -> String {
 #[test]
 fn every_committed_list_reads_and_writes_back_to_the_same_json_value() {
     let corpus = corpus();
-    assert_eq!(corpus.len(), 17, "the seventeen lists");
+    assert_eq!(corpus.len(), 19, "the nineteen lists");
     for (name, _) in &corpus {
         let text = text_of(name);
         let original: Value = serde_json::from_str(&text).unwrap();
@@ -96,7 +96,7 @@ fn the_validator_refuses_the_twenty_one_broken_lists_with_the_oracles_sentences(
         }};
     }
 
-    refused("cast", &|l| l.version = list::Num(4.0), "caster: the writer reads a display list of version 6, and this one is version 4; a list is written again by print(), never upgraded", None);
+    refused("cast", &|l| l.version = list::Num(4.0), "caster: the writer reads a display list of version 7, and this one is version 4; a list is written again by print(), never upgraded", None);
     refused("cast", &|l| l.resources.fonts[0].blob = "0".repeat(64), "caster: the font instance Source Sans 3#1|wght=700 names the blob 0000000000000000000000000000000000000000000000000000000000000000, and the display list holds no bytes under that key", None);
     refused("cast", &|l| l.resources.images.values_mut().next().unwrap().jpeg = Some("f".repeat(64)), "caster: image 0's photo JPEG names the blob ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff, and the display list holds no bytes under that key", None);
     refused("cast", &|l| { let copy = l.resources.fonts[0].clone(); l.resources.fonts.push(copy); }, "caster: the display list holds two font instances under the key Source Sans 3#1|wght=700", None);
@@ -291,7 +291,7 @@ fn every_painted_image_is_the_lists_bytes_in_the_file() {
                 _ => {
                     let samples = source.samples.as_ref().unwrap();
                     let bytes = (samples.bits_per_component.0 / 8.0) as usize;
-                    let stride = (if samples.color_space == "DeviceRGB" { 3 } else { 1 } + usize::from(samples.alpha)) * bytes;
+                    let stride = (match samples.color_space.as_str() { "DeviceRGB" => 3, "DeviceCMYK" => 4, _ => 1 } + usize::from(samples.alpha)) * bytes;
                     let colour_bytes = stride - if samples.alpha { bytes } else { 0 };
                     let data = &blobs[&samples.blob];
                     let colour: Vec<u8> = data.chunks_exact(stride).flat_map(|p| p[..colour_bytes].to_vec()).collect();
@@ -307,7 +307,7 @@ fn every_painted_image_is_the_lists_bytes_in_the_file() {
             seen += 1;
         }
     }
-    assert_eq!(seen, 16, "the images the corpus paints, but the facsimiles");
+    assert_eq!(seen, 24, "the images the corpus paints, but the facsimiles");
 }
 
 /// The colour story on roads, read back by hayro-syntax: the output intent on the catalog with its CMYK profile, `/DefaultRGB` and the `/All` separation on every page, the black-text runs counted; and the oracle's refusals of a profile that is not CMYK, of print marks with no colour story, and of one colourant with two alternates. The record and the content against the oracle's are Caster's `npm run identity -- compare`.
@@ -572,7 +572,7 @@ fn every_list_cut_short_or_with_a_field_renamed_is_refused() {
             let mut renamed = value.clone();
             rename(&mut renamed, &path);
             let error = list::parse(&serde_json::to_string(&renamed).unwrap()).map(|_| ()).unwrap_err().message;
-            assert!(error.starts_with("forme: the display list is not the schema of version 6: at ") || (path == ["version"] && error.contains("this one is version undefined")), "{name}: {} renamed: {error}", path.join("/"));
+            assert!(error.starts_with("forme: the display list is not the schema of version 7: at ") || (path == ["version"] && error.contains("this one is version undefined")), "{name}: {} renamed: {error}", path.join("/"));
             refused += 1;
         }
     }

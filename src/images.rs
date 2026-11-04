@@ -145,7 +145,11 @@ fn source_of<'a>(blobs: &'a Blobs, source: &'a ImageSource) -> Source<'a> {
         return Source::Jpeg { jpeg: &blobs[jpeg], format, gamma_only };
     }
     if let Some(s) = &source.samples {
-        let components = if s.color_space == "DeviceRGB" { 3 } else { 1 };
+        let components = match s.color_space.as_str() {
+            "DeviceRGB" => 3,
+            "DeviceCMYK" => 4,
+            _ => 1,
+        };
         let bytes = (s.bits_per_component.0 / 8.0) as usize;
         let (colour, alpha) = split(&blobs[&s.blob], s.width.0 * s.height.0, components, s.alpha, bytes);
         return Source::Samples(Samples {
@@ -155,6 +159,7 @@ fn source_of<'a>(blobs: &'a Blobs, source: &'a ImageSource) -> Source<'a> {
             alpha,
             space: match s.color_space.as_str() {
                 "DeviceGray" => "DeviceGray",
+                "DeviceCMYK" => "DeviceCMYK",
                 "Indexed" => "Indexed",
                 _ => "DeviceRGB",
             },
@@ -500,7 +505,7 @@ fn from_samples(pdf: &mut Pdf, next: &mut Ref, id: Ref, s: &Samples, interpolate
     let (space, name, icc) = match (s.space, s.palette, s.icc) {
         ("Indexed", Some(palette), _) => (Space::Indexed(palette), "Indexed", false),
         (space, _, Some(profile)) => (Space::Icc(icc_stream(pdf, next, profile, if space == "DeviceRGB" { 3 } else { 1 })), "ICCBased", true),
-        (space, _, None) => (Space::Device(space), if space == "DeviceGray" { "DeviceGray" } else { "DeviceRGB" }, false),
+        (space, _, None) => (Space::Device(space), if space == "DeviceGray" { "DeviceGray" } else if space == "DeviceCMYK" { "DeviceCMYK" } else { "DeviceRGB" }, false),
     };
     let colour = deflate(&s.colour);
     let mask = s.alpha.as_ref().map(|alpha| {
