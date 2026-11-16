@@ -37,7 +37,7 @@ serde_json = { version = "=1.0.154", features = ["float_roundtrip", "raw_value"]
 # The module's size is measured under this profile: `cargo rustc --lib --profile wasm --target wasm32-unknown-unknown --crate-type cdylib`. cargo performs no LTO on a library whose crate types include `rlib`, so `cargo build --lib` builds the module without it.
 [profile.wasm]
 inherits = "release"
-opt-level = "z"
+opt-level = 3
 lto = true
 codegen-units = 1
 panic = "abort"

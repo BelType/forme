@@ -1,6 +1,6 @@
 //! forme: a PDF 2.0 writer that reads Caster's display list and nothing else, held to the files Caster's TypeScript writer prints from the same lists (*the same list prints the same bytes*, Caster's DESIGN.md S102).
 //!
-//! The whole API is [`write`]: a list and its blobs in, the file out, or a [`Refusal`] in a sentence. The list's schema is [`list`], its refusals before a byte are [`validate`], the content-stream writer is [`content`], the fonts are [`fonts`], the image XObjects are [`images`], the facsimiles' Form XObjects are [`facsimile`], the colour story is [`colour`], the vector items are [`vectors`], the page's marked content, text, images, rectangles and print marks are [`text`], and the structure tree and what points into it are [`tree`]. The writer writes the document's scaffolding (the header, the catalog with `/Version /2.0`, `/Lang`, `/DisplayDocTitle`, `/StructTreeRoot`, `/MarkInfo`, `/Outlines` and `/PageLabels`, every page with its boxes, `/Tabs /S`, `/StructParents` and its link annotations, every font instance as `F0`, `F1`, … in its resources and its content stream, the Info dictionary, the XMP packet and the trailer `/ID`), every font instance's objects, every image XObject the list's images and raster fallbacks make and every facsimile's Form XObject (each page naming those it paints), each page's marked content, text, images, rectangles, print marks and vector items (paths, shadings, patterns, graphics states, groups, forms and raster fallbacks), the colour story (the output intent, `/DefaultRGB`, the separations and the overprint states), and the tree; it returns the `mcids`, `pens`, `kernAdjustments`, `actualTextSpans`, `faces`, `images`, `xobjects`, `paint`, `vectorResources` and `colour` records beside the bytes. It writes every item kind of the list but the dormant colour cluster, which it refuses by name.
+//! The whole API is [`write`]: a list and its blobs in, the file out, or a [`Refusal`] in a sentence; [`write_trusting`] is the same write for a caller that keeps blobs it has already hashed. The list's schema is [`list`], its refusals before a byte are [`validate`], the content-stream writer is [`content`], the fonts are [`fonts`], the image XObjects are [`images`], the facsimiles' Form XObjects are [`facsimile`], the colour story is [`colour`], the vector items are [`vectors`], the page's marked content, text, images, rectangles and print marks are [`text`], and the structure tree and what points into it are [`tree`]. The writer writes the document's scaffolding (the header, the catalog with `/Version /2.0`, `/Lang`, `/DisplayDocTitle`, `/StructTreeRoot`, `/MarkInfo`, `/Outlines` and `/PageLabels`, every page with its boxes, `/Tabs /S`, `/StructParents` and its link annotations, every font instance as `F0`, `F1`, … in its resources and its content stream, the Info dictionary, the XMP packet and the trailer `/ID`), every font instance's objects, every image XObject the list's images and raster fallbacks make and every facsimile's Form XObject (each page naming those it paints), each page's marked content, text, images, rectangles, print marks and vector items (paths, shadings, patterns, graphics states, groups, forms and raster fallbacks), the colour story (the output intent, `/DefaultRGB`, the separations and the overprint states), and the tree; it returns the `mcids`, `pens`, `kernAdjustments`, `actualTextSpans`, `faces`, `images`, `xobjects`, `paint`, `vectorResources` and `colour` records beside the bytes. It writes every item kind of the list but the dormant colour cluster, which it refuses by name.
 
 pub mod colour;
 pub mod content;
@@ -91,8 +91,16 @@ pub struct Records {
 /// # Errors
 /// Every refusal of [`validate::validate`], first; then a blob whose bytes are not its name, an `info.created` that is not an instant in UTC, every refusal of [`fonts::write_fonts`], of [`images::write`] and of [`colour::Colour`], and a colour-cluster item, by name.
 pub fn write(list: &DisplayList, blobs: &Blobs) -> Result<Written, Refusal> {
+    write_trusting(list, blobs, &|_| false)
+}
+
+/// The file a list makes, as [`write`] makes it, with the blobs `verified` names taken as named by their bytes and not hashed again: a writer that keeps blobs between writes (`src/wasm.rs`'s `writeKept`) hashed each once, on arrival.
+///
+/// # Errors
+/// Every refusal of [`write`], in the same order; a blob `verified` names is never refused for its bytes.
+pub fn write_trusting(list: &DisplayList, blobs: &Blobs, verified: &dyn Fn(&str) -> bool) -> Result<Written, Refusal> {
     validate::validate(list, blobs)?;
-    for (name, bytes) in blobs {
+    for (name, bytes) in blobs.iter().filter(|(name, _)| !verified(name)) {
         let hash = hex(&Sha256::digest(bytes));
         if &hash != name {
             return Err(Refusal::new(format!("forme: the blob {name} holds bytes whose SHA-256 is {hash}; a blob is named by its bytes")));

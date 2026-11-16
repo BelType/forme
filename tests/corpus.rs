@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use forme::list::{self, Conformance, DisplayList, Item, StructChild, TagEndItem, TagStart};
-use forme::{Refusal, read_blobs, validate::validate, write};
+use forme::{Refusal, read_blobs, validate::validate, write, write_trusting};
 use serde_json::Value;
 
 fn lists() -> PathBuf {
@@ -109,12 +109,12 @@ fn the_validator_refuses_the_twenty_one_broken_lists_with_the_oracles_sentences(
     }, "caster: the image at item 1 of page 2 names source 77, which resources.images does not hold", Some([1.0, 1.0]));
     refused("cast", &|l| { let first = tags(l)[0]; l.pages[0].items[first] = Item::TagEnd(TagEndItem { kind: list::KindTag, end: true }); }, "caster: the marked content end at item 0 of page 1 closes nothing", Some([0.0, 0.0]));
     refused("cast", &|l| { let first = ends(l)[0]; l.pages[0].items.remove(first); }, "caster: the marked content at item 2 of page 1 opens inside the one opened at item 0, which is not yet closed", Some([0.0, 2.0]));
-    refused("cast", &|l| { let last = *ends(l).last().unwrap(); l.pages[0].items.remove(last); }, "caster: the marked content opened at item 28 of page 1 is never closed", Some([0.0, 28.0]));
+    refused("cast", &|l| { let last = *ends(l).last().unwrap(); l.pages[0].items.remove(last); }, "caster: the marked content opened at item 30 of page 1 is never closed", Some([0.0, 30.0]));
     refused("cast", &|l| {
         let at = tags(l).into_iter().find(|&at| matches!(&l.pages[0].items[at], Item::TagStart(t) if matches!(t.start, TagStart::Content(_)))).unwrap();
         if let Item::TagStart(tag) = &mut l.pages[0].items[at] && let TagStart::Content(start) = &mut tag.start { start.element = list::Num(999.0); }
     }, "caster: the marked content at item 0 of page 1 names structure element 999, and the list's tree has 32", None);
-    refused("paper", &|l| l.outline[0].element = list::Num(-3.0), "caster: the bookmark \"Leaf litter decomposition along an altitudinal gradient\" names structure element -3, and the list's tree has 102", None);
+    refused("paper", &|l| l.outline[0].element = list::Num(-3.0), "caster: the bookmark \"Leaf litter decomposition along an altitudinal gradient\" names structure element -3, and the list's tree has 101", None);
     refused("cast", &|l| { let n = l.structure.elements.len(); l.structure.elements[0].children.push(StructChild::Element(list::Num(n as f64))); }, "caster: structure element 0 (Document) lists child 32, which is not an element below the root", None);
     refused("cast", &|l| {
         let item = first_text(l) as f64;
@@ -169,6 +169,18 @@ fn the_writer_refuses_a_blob_that_is_not_its_name_and_a_date_that_is_not_an_inst
     assert!(text.contains("/CreationDate (D:20261102102030Z)") && text.contains("/ModDate (D:20261102102030Z)"), "both dates, at whole seconds");
     list.info.created = "2026-11-02 10:20".into();
     assert_eq!(write(&list, &blobs).unwrap_err().message, "caster: the display list's info.created is \"2026-11-02 10:20\", which is not an ISO 8601 instant in UTC (YYYY-MM-DDTHH:mm:ssZ)");
+}
+
+#[test]
+fn a_trusting_write_hashes_only_the_blobs_it_is_not_told_were_hashed_and_writes_the_same_bytes() {
+    let (list, mut blobs) = list_of("cast");
+    let once = write(&list, &blobs).unwrap().bytes;
+    assert_eq!(write_trusting(&list, &blobs, &|_| true).unwrap().bytes, once, "every blob trusted");
+    let font = list.resources.fonts[0].blob.clone();
+    blobs.get_mut(&font).unwrap()[0] ^= 1;
+    let refused = write_trusting(&list, &blobs, &|key| key != font).unwrap_err().message;
+    assert!(refused.starts_with(&format!("forme: the blob {font} holds bytes whose SHA-256 is ")), "a blob not trusted is hashed: {refused}");
+    assert_eq!(refused, write(&list, &blobs).unwrap_err().message, "with the sentence write refuses it with");
 }
 
 #[test]
