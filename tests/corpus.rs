@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use forme::list::{self, Conformance, DisplayList, Item, StructChild, TagEndItem, TagStart};
-use forme::{Refusal, read_blobs, validate::validate, write};
+use forme::{Refusal, read_blobs, validate::validate, write, write_trusting};
 use serde_json::Value;
 
 fn lists() -> PathBuf {
@@ -169,6 +169,18 @@ fn the_writer_refuses_a_blob_that_is_not_its_name_and_a_date_that_is_not_an_inst
     assert!(text.contains("/CreationDate (D:20261102102030Z)") && text.contains("/ModDate (D:20261102102030Z)"), "both dates, at whole seconds");
     list.info.created = "2026-11-02 10:20".into();
     assert_eq!(write(&list, &blobs).unwrap_err().message, "caster: the display list's info.created is \"2026-11-02 10:20\", which is not an ISO 8601 instant in UTC (YYYY-MM-DDTHH:mm:ssZ)");
+}
+
+#[test]
+fn a_trusting_write_hashes_only_the_blobs_it_is_not_told_were_hashed_and_writes_the_same_bytes() {
+    let (list, mut blobs) = list_of("cast");
+    let once = write(&list, &blobs).unwrap().bytes;
+    assert_eq!(write_trusting(&list, &blobs, &|_| true).unwrap().bytes, once, "every blob trusted");
+    let font = list.resources.fonts[0].blob.clone();
+    blobs.get_mut(&font).unwrap()[0] ^= 1;
+    let refused = write_trusting(&list, &blobs, &|key| key != font).unwrap_err().message;
+    assert!(refused.starts_with(&format!("forme: the blob {font} holds bytes whose SHA-256 is ")), "a blob not trusted is hashed: {refused}");
+    assert_eq!(refused, write(&list, &blobs).unwrap_err().message, "with the sentence write refuses it with");
 }
 
 #[test]
