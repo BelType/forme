@@ -109,12 +109,12 @@ fn the_validator_refuses_the_twenty_one_broken_lists_with_the_oracles_sentences(
     }, "caster: the image at item 1 of page 2 names source 77, which resources.images does not hold", Some([1.0, 1.0]));
     refused("cast", &|l| { let first = tags(l)[0]; l.pages[0].items[first] = Item::TagEnd(TagEndItem { kind: list::KindTag, end: true }); }, "caster: the marked content end at item 0 of page 1 closes nothing", Some([0.0, 0.0]));
     refused("cast", &|l| { let first = ends(l)[0]; l.pages[0].items.remove(first); }, "caster: the marked content at item 2 of page 1 opens inside the one opened at item 0, which is not yet closed", Some([0.0, 2.0]));
-    refused("cast", &|l| { let last = *ends(l).last().unwrap(); l.pages[0].items.remove(last); }, "caster: the marked content opened at item 28 of page 1 is never closed", Some([0.0, 28.0]));
+    refused("cast", &|l| { let last = *ends(l).last().unwrap(); l.pages[0].items.remove(last); }, "caster: the marked content opened at item 30 of page 1 is never closed", Some([0.0, 30.0]));
     refused("cast", &|l| {
         let at = tags(l).into_iter().find(|&at| matches!(&l.pages[0].items[at], Item::TagStart(t) if matches!(t.start, TagStart::Content(_)))).unwrap();
         if let Item::TagStart(tag) = &mut l.pages[0].items[at] && let TagStart::Content(start) = &mut tag.start { start.element = list::Num(999.0); }
     }, "caster: the marked content at item 0 of page 1 names structure element 999, and the list's tree has 32", None);
-    refused("paper", &|l| l.outline[0].element = list::Num(-3.0), "caster: the bookmark \"Leaf litter decomposition along an altitudinal gradient\" names structure element -3, and the list's tree has 102", None);
+    refused("paper", &|l| l.outline[0].element = list::Num(-3.0), "caster: the bookmark \"Leaf litter decomposition along an altitudinal gradient\" names structure element -3, and the list's tree has 101", None);
     refused("cast", &|l| { let n = l.structure.elements.len(); l.structure.elements[0].children.push(StructChild::Element(list::Num(n as f64))); }, "caster: structure element 0 (Document) lists child 32, which is not an element below the root", None);
     refused("cast", &|l| {
         let item = first_text(l) as f64;
