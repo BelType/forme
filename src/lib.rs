@@ -146,8 +146,8 @@ pub fn write_trusting(list: &DisplayList, blobs: &Blobs, verified: &dyn Fn(&str)
     if let Some(labels) = tree.page_labels {
         catalog.pair(Name(b"PageLabels"), labels);
     }
-    if let Some((_, intent, _)) = &colour {
-        catalog.insert(Name(b"OutputIntents")).array().item(*intent);
+    if let Some((_, intents, _)) = &colour {
+        catalog.insert(Name(b"OutputIntents")).array().items(intents.iter().copied());
     }
     catalog.finish();
 
@@ -224,13 +224,16 @@ pub fn write_trusting(list: &DisplayList, blobs: &Blobs, verified: &dyn Fn(&str)
         pdf.stream(content_id, &fonts::deflate(&content.bytes)).filter(pdf_writer::Filter::FlateDecode);
     }
 
-    let mut info = pdf.document_info(info_id);
-    text_pair(&mut info, b"Title", &list.info.title);
-    info.producer(TextStr(PRODUCER));
-    info.creator(TextStr(PRODUCER));
-    info.pair(Name(b"CreationDate"), Str(date.as_bytes()));
-    info.pair(Name(b"ModDate"), Str(date.as_bytes()));
-    info.finish();
+    // Under the archival claim the file carries no document information dictionary (PDF/A-4 6.1.3, veraPDF's 6.1.3-4): the title is the XMP's, and the identifier its object would have had stays a free entry.
+    if list.info.archival.is_none() {
+        let mut info = pdf.document_info(info_id);
+        text_pair(&mut info, b"Title", &list.info.title);
+        info.producer(TextStr(PRODUCER));
+        info.creator(TextStr(PRODUCER));
+        info.pair(Name(b"CreationDate"), Str(date.as_bytes()));
+        info.pair(Name(b"ModDate"), Str(date.as_bytes()));
+        info.finish();
+    }
 
     // Metadata streams stay uncompressed so they remain readable without the document, which is the whole point of the packet.
     pdf.metadata(xmp_id, xmp(list).as_bytes());
@@ -285,7 +288,7 @@ fn escape_xml(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
-/// The XMP packet as Caster's `addXmpMetadata` builds it: dc:title, the producing tool twice, the PDF/UA-2 identification when the file claims it, the language; UTF-8, its title through `TextEncoder`'s rule (a lone surrogate becomes U+FFFD). Past the oracle, Well-Tagged PDF's two PDF Declarations, accessibility and reuse (WTPDF 1.0 §6.1.2 and §6.1.3, in the `pdfd` schema of PDF Declarations §8), are written with the PDF/UA-2 claim and withdrawn with it, as Egildo ruled on 2026-11-02. Each is written in two spellings, four `conformsTo` entries, as Egildo ruled on 2026-11-03: `wtpdf#…`, as veraPDF 1.30's `wt1a` and `wt1r` test them (`declarations.contains(…)`, so the other entries do no harm), and `wtpdf/#…`, as the WTPDF 1.0.0 text (2024-02) prints them. The README records the three spellings found and the evidence. Under a list claiming nothing (`tagged`, Caster's `standard: 'none'` or a guess) none is written.
+/// The XMP packet as Caster's `addXmpMetadata` builds it: dc:title, the producing tool twice, the PDF/UA-2 identification when the file claims it, the language; UTF-8, its title through `TextEncoder`'s rule (a lone surrogate becomes U+FFFD). Past the oracle, Well-Tagged PDF's two PDF Declarations, accessibility and reuse (WTPDF 1.0 §6.1.2 and §6.1.3, in the `pdfd` schema of PDF Declarations §8), are written with the PDF/UA-2 claim and withdrawn with it, as Egildo ruled on 2026-11-02. Each is written in two spellings, four `conformsTo` entries, as Egildo ruled on 2026-11-03: `wtpdf#…`, as veraPDF 1.30's `wt1a` and `wt1r` test them (`declarations.contains(…)`, so the other entries do no harm), and `wtpdf/#…`, as the WTPDF 1.0.0 text (2024-02) prints them. The README records the three spellings found and the evidence. Under a list claiming nothing (`tagged`, Caster's `standard: 'none'` or a guess) none is written. Under the archival claim (`info.archival`, `pdfa4`) the PDF/A-4 identification follows, part 4 and rev 2020 with no conformance level (ISO 19005-4 6.7.3, as veraPDF's rules 6.7.3-1 to -6 read it), whatever the PDF/UA-2 claim.
 fn xmp(list: &DisplayList) -> String {
     let language = &list.info.lang;
     let title = escape_xml(&list.info.title.lossy());
@@ -295,6 +298,7 @@ fn xmp(list: &DisplayList) -> String {
     } else {
         ""
     };
+    let archival = if list.info.archival.is_some() { "\n    <rdf:Description rdf:about=\"\" xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\">\n      <pdfaid:part>4</pdfaid:part>\n      <pdfaid:rev>2020</pdfaid:rev>\n    </rdf:Description>" } else { "" };
     format!(
         "<?xpacket begin=\"\u{FEFF}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>
 <x:xmpmeta xmlns:x=\"adobe:ns:meta/\">
@@ -311,7 +315,7 @@ fn xmp(list: &DisplayList) -> String {
     </rdf:Description>
     <rdf:Description rdf:about=\"\" xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\">
       <pdf:Producer>{tool}</pdf:Producer>
-    </rdf:Description>{ua}
+    </rdf:Description>{ua}{archival}
   </rdf:RDF>
 </x:xmpmeta>
 <?xpacket end=\"w\"?>"

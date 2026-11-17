@@ -92,12 +92,13 @@ struct Samples<'a> {
 pub fn write(pdf: &mut Pdf, next: &mut Ref, list: &DisplayList, blobs: &Blobs) -> Result<Images, Refusal> {
     let mut images = Images::default();
     let mut by_hash: BTreeMap<String, usize> = BTreeMap::new();
-    // What each painted image is interpolated by: the last item to paint it decides, as in the oracle.
+    // What each painted image is interpolated by: the last item to paint it decides, as in the oracle; under the archival claim nothing is (PDF/A-4 6.2.7.1, veraPDF's 6.2.7.1-3), a raster fallback included.
+    let smooth = list.info.archival.is_none();
     let mut interpolate_of: BTreeMap<u32, bool> = BTreeMap::new();
     for page in &list.pages {
         for item in &page.items {
             if let Item::Image(image) = item {
-                interpolate_of.insert(image.source.0 as u32, image.interpolate);
+                interpolate_of.insert(image.source.0 as u32, image.interpolate && smooth);
             }
         }
     }
@@ -131,7 +132,7 @@ pub fn write(pdf: &mut Pdf, next: &mut Ref, list: &DisplayList, blobs: &Blobs) -
                 Source::Samples(Samples { width, height, colour, alpha, space: "DeviceRGB", bits: 8, palette: None, icc: None, label: format!("{}@{}dpi", raster.feature, js_string(raster.dpi.0)), gamma_only: false })
             }
         };
-        let at = embed_one(pdf, next, &mut images, &mut by_hash, &embed, true)?;
+        let at = embed_one(pdf, next, &mut images, &mut by_hash, &embed, smooth)?;
         images.of_raster.insert(key, at);
     }
     Ok(images)

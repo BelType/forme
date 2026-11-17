@@ -1,12 +1,12 @@
 //! The refusals of a list the writer could not write, each a sentence, before a byte is written: Caster's `validateList` (`src/displayList/validate.ts`), ported check for check, in its order, with its sentences.
 //!
-//! What it holds: the version (read first, by [`crate::list::parse`]); every blob key a resource names; each image's samples in a shape the schema names, as many bytes as it says (version 6; `DeviceCMYK` at four components and with neither palette nor profile, version 7); the font instances (unique keys, sorted widths, a width for every glyph a text item shows and every space glyph it names); under a PDF/UA-2 claim, no word gap of a face with no space glyph; every image and raster key a page item names; the marked content of each page (no end without a start, none left open); the links (`order` running 0, 1, 2 … over the document, a destination or a URI on each); the structure tree (an element index anywhere in range, one parent each, no cycle, a content child that is a content start naming its element back, every content start some element's child, a link child owned by the link's element, the attribute keys the schema names, a namespace that is the PDF 1.7 one where one is named, every `refs` index in range and none empty). What it leaves to the writer is what only writing finds. A number in a sentence is written as JavaScript's `String` writes it, so a sentence is the oracle's to the character.
+//! What it holds: the version (read first, by [`crate::list::parse`]); every blob key a resource names; each image's samples in a shape the schema names, as many bytes as it says (version 6; `DeviceCMYK` at four components and with neither palette nor profile, version 7); the font instances (unique keys, sorted widths, a width for every glyph a text item shows and every space glyph it names); under a PDF/UA-2 claim, no word gap of a face with no space glyph; under the archival claim a colour story, no facsimile, and no CMYK colour without a CMYK output profile; every image and raster key a page item names; the marked content of each page (no end without a start, none left open); the links (`order` running 0, 1, 2 … over the document, a destination or a URI on each); the structure tree (an element index anywhere in range, one parent each, no cycle, a content child that is a content start naming its element back, every content start some element's child, a link child owned by the link's element, the attribute keys the schema names, a namespace that is the PDF 1.7 one where one is named, every `refs` index in range and none empty). What it leaves to the writer is what only writing finds. A number in a sentence is written as JavaScript's `String` writes it, so a sentence is the oracle's to the character.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::Refusal;
 use crate::content::js_string;
-use crate::list::{Blobs, Conformance, DisplayList, Item, LinkItem, Num, StructChild, StructElement, TagStart, json_string};
+use crate::list::{BlackTextPolicy, Blobs, Conformance, DisplayList, Fill, Item, LinkItem, Num, Paint, ShadingSpace, StructChild, StructElement, TagStart, VectorItem, json_string};
 
 /// The keys an attribute object of `/A` may carry, which the writer writes in this order.
 pub const ATTRIBUTE_KEYS: [&str; 9] = ["O", "ListNumbering", "BBox", "Scope", "Headers", "RowSpan", "ColSpan", "TextPosition", "NoteType"];
@@ -26,6 +26,7 @@ pub fn validate(list: &DisplayList, blobs: &Blobs) -> Result<(), Refusal> {
     check_samples(list, blobs)?;
     check_fonts(list)?;
     check_gaps(list)?;
+    check_archival(list, blobs)?;
     check_items(list)?;
     check_links(list)?;
     check_tree(list)
@@ -123,6 +124,95 @@ fn check_fonts(list: &DisplayList) -> Result<(), Refusal> {
         }
     }
     Ok(())
+}
+
+/// A list that claims PDF/A-4 is one the file can keep it for, or it is refused by name (*an archival claim is kept or refused*, Caster's DESIGN.md S109): it carries a colour story, so its device colour has an output intent; it places no page of another PDF, which the writer copies as it is and does not read; and no colour in it is CMYK unless the output profile is a CMYK one. CMYK is a declared ink (process or spot, whose alternate is CMYK) on a run or a rectangle, black text under `blackText: '100k'`, a vector paint or gradient in CMYK, print marks (the `/All` separation), and an image whose samples are `DeviceCMYK` or whose file is a four-component JPEG. The facsimiles are read by image key, then the pages' items in order, then the forms by name.
+fn check_archival(list: &DisplayList, blobs: &Blobs) -> Result<(), Refusal> {
+    if list.info.archival.is_none() {
+        return Ok(());
+    }
+    let Some(story) = &list.writing.colour else {
+        return Err(Refusal::new("caster: the display list claims PDF/A-4 and carries no colour story, so no output intent would say what its colours mean (ISO 19005-4, 6.2.4.3)".into()));
+    };
+    for image in list.resources.images.values() {
+        if let Some(f) = &image.facsimile {
+            return Err(Refusal::new(format!("caster: the facsimile at {} is page {} of {}, a page of another PDF, which Caster copies as it is and does not read, so it cannot stand behind it under PDF/A-4; print without `a-4` in `standard`, or place the page as an image", image.dom_path, js_string(f.page.0), f.url)));
+        }
+    }
+    if blobs[&story.profiles.cmyk].get(16..20) == Some(b"CMYK") {
+        return Ok(());
+    }
+    let refusal = |what: String| format!("caster: {what}, and no CMYK profile stands behind it: the output intent is an RGB profile, so the file could not say what the ink means, which PDF/A-4 asks of every colour (ISO 19005-4, 6.2.4.3); pass a CMYK profile as the `profile` option, or print without `a-4` in `standard`");
+    let inked = |fill: &Fill| fill.ink.is_some();
+    for (p, page) in list.pages.iter().enumerate() {
+        for (at, item) in page.items.iter().enumerate() {
+            let cmyk = match item {
+                Item::Text(t) if story.black_text == BlackTextPolicy::HundredK && !inked(&t.fill) && t.fill.rgb.iter().all(|c| c.0 == 0.0) => {
+                    return Err(Refusal::at(refusal(format!("text item {at} of page {} is painted in CMYK, by `blackText: '100k'`", p + 1)), p, at));
+                }
+                Item::Text(t) => inked(&t.fill),
+                Item::Rect(r) => inked(&r.fill),
+                Item::Marks(_) => true,
+                Item::Image(i) => image_cmyk(list, blobs, i.source.0)?,
+                Item::Group(g) => group_cmyk(g),
+                Item::Path(x) => path_cmyk(x),
+                Item::Form(f) => mask_cmyk(&f.soft_mask),
+                Item::RasterFallback(r) => mask_cmyk(&r.soft_mask),
+                _ => false,
+            };
+            if cmyk {
+                return Err(Refusal::at(refusal(format!("{} item {at} of page {} is painted in CMYK", item.kind(), p + 1)), p, at));
+            }
+        }
+    }
+    for (name, form) in &list.resources.forms {
+        if form.items.iter().any(vector_cmyk) {
+            return Err(Refusal::new(refusal(format!("the form {name} is painted in CMYK"))));
+        }
+    }
+    Ok(())
+}
+
+/// Whether an image's samples or file are CMYK: `DeviceCMYK` samples, or a JPEG of four components.
+fn image_cmyk(list: &DisplayList, blobs: &Blobs, source: f64) -> Result<bool, Refusal> {
+    let Some(image) = list.resources.images.get(&(source as u32)) else { return Ok(false) };
+    if image.samples.as_ref().is_some_and(|s| s.color_space == "DeviceCMYK") {
+        return Ok(true);
+    }
+    match (&image.blob, image.mime.as_deref()) {
+        (Some(blob), Some("image/jpeg")) => Ok(crate::images::parse_jpeg(&blobs[blob])?.components == 4),
+        _ => Ok(false),
+    }
+}
+
+/// Whether a vector item paints in CMYK, its children and its mask among it; a form item is read where its definition is, by name.
+fn vector_cmyk(item: &VectorItem) -> bool {
+    match item {
+        VectorItem::Path(x) => path_cmyk(x),
+        VectorItem::Group(g) => group_cmyk(g),
+        VectorItem::Form(f) => mask_cmyk(&f.soft_mask),
+        VectorItem::RasterFallback(r) => mask_cmyk(&r.soft_mask),
+    }
+}
+
+/// A path's fill or stroke in CMYK, a process colour or a CMYK gradient, or its mask's content.
+fn path_cmyk(x: &crate::list::PathItem) -> bool {
+    let paint = |p: &Paint| match p {
+        Paint::Cmyk(_) => true,
+        Paint::Gradient(g) => g.gradient.color_space == ShadingSpace::DeviceCmyk,
+        Paint::Rgb(_) => false,
+    };
+    x.fill.as_ref().is_some_and(paint) || x.stroke.as_ref().is_some_and(|s| paint(&s.paint)) || mask_cmyk(&x.soft_mask)
+}
+
+/// A group's children or its mask's content in CMYK.
+fn group_cmyk(g: &crate::list::GroupItem) -> bool {
+    g.items.iter().any(vector_cmyk) || mask_cmyk(&g.soft_mask)
+}
+
+/// Whether a soft mask's content paints in CMYK.
+fn mask_cmyk(mask: &Option<crate::list::SoftMask>) -> bool {
+    mask.as_ref().is_some_and(|m| m.items.iter().any(vector_cmyk))
 }
 
 /// A list that claims PDF/UA-2 shows no word gap as glyph 0 (*PDF/UA-2 is a flag, not a given*, Caster's DESIGN.md S103): a text item's `space` is 0 when its face has no space glyph, and a gap it owes (`leadingSpace`, or `spaceBefore` past the first segment) would show `.notdef`, which PDF/UA-2 forbids (ISO 14289-2, 8.4.5.9). Under a list that claims nothing the writer writes such a gap as positioning with no glyph.

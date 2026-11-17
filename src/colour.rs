@@ -1,6 +1,6 @@
 //! The colour story: the document's colour objects and the operator each paint is written with, ported from Caster's `src/colour/colorResources.ts` (`ColorResources`, `ColorEmitter`) and the `marks` branch of `src/emit/structureEmit.ts`.
 //!
-//! - **The output intent** is `/GTS_PDFX` with the CMYK profile as `/DestOutputProfile`; the profile is read by three header fields at fixed offsets (the device class at 12, the colour space at 16, the version at 8) and no ICC library, and one that is not CMYK, not `prtr` or `mntr`, or an sRGB profile that is not RGB, is refused in the oracle's sentence.
+//! - **The output intent** is `/GTS_PDFX` with the output profile (the CMYK one, or the sRGB one where the list names no other) as `/DestOutputProfile`, and under the archival claim a `/GTS_PDFA1` intent beside it on the same profile object; the profile is read by three header fields at fixed offsets (the device class at 12, the colour space at 16, the version at 8) and no ICC library, and one that is neither CMYK nor RGB, not `prtr` or `mntr`, or an sRGB profile that is not RGB, is refused in the oracle's sentence.
 //! - **`/DefaultRGB`** is on every page, an `/ICCBased` array over the one sRGB stream, beside every `/Separation` and every overprint `/ExtGState` the document allocated, since a name is allocated on first use and the last page may use it first.
 //! - **A spot ink is a colour space**: `/Separation`, the colourant's UTF-8 bytes escaped as `escapeColorantName` escapes them (pdf-writer's `Name` escapes the same set), `/DeviceCMYK` and a type 2 function from white to the alternate; one per colourant name, `All` and `None` among them, a second alternate for one name refused. `CS0`, `CS1`, … and `GS0`, `GS1`, … in first-use order, the reset state allocated with the first overprint.
 //! - **The operator choice** is the oracle's, in its order: a declared ink wins (`k`, or `/CSn cs t scn`); an unhinted black run under `blackText: '100k'` is `0 0 0 1 k`; anything else stays `rg` and goes on the work list. A rectangle takes no black-text policy. Every colour operand is rounded to four decimals.
@@ -194,6 +194,8 @@ pub struct Colour<'a> {
     story: &'a ColourWriting,
     profile: &'a [u8],
     srgb: &'a [u8],
+    /// The list claims PDF/A-4, so the archive's output intent stands beside the print shop's.
+    archival: bool,
     separations: Vec<Separation>,
     /// The overprint modes allocated, in order: `fill`, `stroke`, `both` or `reset`.
     states: Vec<&'static str>,
@@ -206,14 +208,14 @@ impl<'a> Colour<'a> {
     /// The colour story of `list`, when it has one.
     ///
     /// # Errors
-    /// An output profile that is not CMYK, or whose device class is neither `prtr` nor `mntr`; a `/DefaultRGB` profile that is not RGB; each in the oracle's sentence.
+    /// An output profile that is neither CMYK nor RGB, or whose device class is neither `prtr` nor `mntr`; a `/DefaultRGB` profile that is not RGB; each in the oracle's sentence.
     pub fn new(list: &'a DisplayList, blobs: &'a Blobs) -> Result<Option<Self>, Refusal> {
         let Some(story) = &list.writing.colour else { return Ok(None) };
         let profile = blobs[&story.profiles.cmyk].as_slice();
         let srgb = blobs[&story.profiles.srgb].as_slice();
         let space = field(profile, 16);
-        if space != "CMYK" {
-            return Err(Refusal::new(format!("colorResources: the output profile is {}, not CMYK", quoted(&space))));
+        if space != "CMYK" && space != "RGB " {
+            return Err(Refusal::new(format!("colorResources: the output profile is {}, not CMYK or RGB", quoted(&space))));
         }
         let class = field(profile, 12);
         if class != "prtr" && class != "mntr" {
@@ -222,7 +224,7 @@ impl<'a> Colour<'a> {
         if field(srgb, 16) != "RGB " {
             return Err(Refusal::new("colorResources: the /DefaultRGB profile is not an RGB profile".into()));
         }
-        Ok(Some(Self { story, profile, srgb, separations: Vec::new(), states: Vec::new(), elements: Vec::new(), worklist: Vec::new(), black_text_runs: 0 }))
+        Ok(Some(Self { story, profile, srgb, archival: list.info.archival.is_some(), separations: Vec::new(), states: Vec::new(), elements: Vec::new(), worklist: Vec::new(), black_text_runs: 0 }))
     }
 
     /// `separationRef`: the index of the `/Separation` for one colourant, allocated on first use.
@@ -353,10 +355,10 @@ impl<'a> Colour<'a> {
         Ok(())
     }
 
-    /// Write the colour objects (the sRGB stream, every `/Separation`, every `/ExtGState`, the output profile and the intent), and hand back what every page's resources name, the output intent for the catalog, and the record.
+    /// Write the colour objects (the sRGB stream, every `/Separation`, every `/ExtGState`, the output profile and the intent, two under the archival claim), and hand back what every page's resources name, the output intents for the catalog, and the record.
     ///
     /// `srgb` is the sRGB stream's object when a blend's group named it before the colour objects were written.
-    pub fn finish(self, pdf: &mut Pdf, next: &mut Ref, srgb: Option<Ref>) -> (PageResources, Ref, Record) {
+    pub fn finish(self, pdf: &mut Pdf, next: &mut Ref, srgb: Option<Ref>) -> (PageResources, Vec<Ref>, Record) {
         let srgb = match srgb {
             Some(id) => crate::images::icc_stream_at(pdf, id, self.srgb, 3),
             None => crate::images::icc_stream(pdf, next, self.srgb, 3),
@@ -386,17 +388,22 @@ impl<'a> Colour<'a> {
             states.push((format!("GS{i}"), id));
         }
         let space = field(self.profile, 16);
-        let n = 4;
+        let n = if space == "RGB " { 3 } else { 4 };
         let profile = next.bump();
         pdf.stream(profile, &crate::fonts::deflate(self.profile)).filter(Filter::FlateDecode).pair(Name(b"N"), n);
-        let intent = next.bump();
-        let mut d = pdf.indirect(intent).dict();
-        d.pair(Name(b"Type"), Name(b"OutputIntent")).pair(Name(b"S"), Name(b"GTS_PDFX"));
-        d.pair(Name(b"OutputConditionIdentifier"), TextStr(&self.story.condition));
-        d.pair(Name(b"RegistryName"), TextStr("http://www.color.org"));
-        d.pair(Name(b"Info"), TextStr(&self.story.info));
-        d.pair(Name(b"DestOutputProfile"), profile);
-        d.finish();
+        // The print shop's intent, and under the archival claim the archive's beside it on the one profile (*an archival claim is kept or refused*): veraPDF's PDF/A-4 profile reads only a `GTS_PDFA1` intent as the archive's, and holds every intent to one `DestOutputProfile` (6.2.3-2).
+        let subtypes: &[&[u8]] = if self.archival { &[b"GTS_PDFX", b"GTS_PDFA1"] } else { &[b"GTS_PDFX"] };
+        let intents: Vec<Ref> = subtypes.iter().map(|&subtype| {
+            let intent = next.bump();
+            let mut d = pdf.indirect(intent).dict();
+            d.pair(Name(b"Type"), Name(b"OutputIntent")).pair(Name(b"S"), Name(subtype));
+            d.pair(Name(b"OutputConditionIdentifier"), TextStr(&self.story.condition));
+            d.pair(Name(b"RegistryName"), TextStr("http://www.color.org"));
+            d.pair(Name(b"Info"), TextStr(&self.story.info));
+            d.pair(Name(b"DestOutputProfile"), profile);
+            d.finish();
+            intent
+        }).collect();
 
         let sha = |b: &[u8]| crate::hex(&Sha256::digest(b));
         let mut color_spaces = vec![Space { name: "DefaultRGB".into(), kind: "ICCBased", alternate: "sRGB ICC, /N 3".into(), colorant: None, escaped: None, c1: None }];
@@ -430,7 +437,7 @@ impl<'a> Colour<'a> {
             worklist: self.worklist.into_iter().map(|(_, w)| w).collect(),
             registrations: Vec::new(),
         };
-        (PageResources { srgb, spaces, states }, intent, record)
+        (PageResources { srgb, spaces, states }, intents, record)
     }
 }
 

@@ -342,7 +342,13 @@ fn the_colour_story_is_written_and_its_refusals_are_the_oracles() {
 
     let mut rgb = list.clone();
     rgb.writing.colour.as_mut().unwrap().profiles.cmyk = rgb.writing.colour.as_ref().unwrap().profiles.srgb.clone();
-    assert_eq!(write(&rgb, &blobs).unwrap_err().message, "colorResources: the output profile is \"RGB \", not CMYK");
+    let rgb_intent = hayro_syntax::Pdf::new(write(&rgb, &blobs).unwrap().bytes).unwrap();
+    let rgb_catalog = rgb_intent.xref().get::<Dict>(rgb_intent.xref().root_id()).unwrap();
+    let rgb_profile = rgb_catalog.get::<Array>(b"OutputIntents").unwrap().iter::<Dict>().next().unwrap().get::<Stream>(b"DestOutputProfile").unwrap();
+    assert_eq!(rgb_profile.dict().get::<i32>(b"N"), Some(3), "an RGB output profile is written, as the oracle writes it, with /N 3");
+    let mut grey = list.clone();
+    grey.writing.colour.as_mut().unwrap().profiles.cmyk = list.resources.fonts[0].blob.clone();
+    assert!(write(&grey, &blobs).unwrap_err().message.ends_with(", not CMYK or RGB"), "a profile that is neither is refused in the oracle's sentence");
     let mut bare = list.clone();
     bare.writing.colour = None;
     assert_eq!(write(&bare, &blobs).unwrap_err().message, "caster: print marks are stroked in the /All separation, which needs the colour options");
@@ -689,4 +695,45 @@ fn a_gap_with_no_space_glyph_is_refused_under_the_claim_and_positioning_without_
     let text = String::from_utf8_lossy(&bytes).into_owned();
     assert!(!text.contains("pdfuaid") && !text.contains("pdfd:declarations"), "the XMP claims nothing");
     assert_eq!(shown(bytes), glyphs, "with no space glyph, no gap shows a glyph");
+}
+
+/// A list made from a committed one with its JSON changed by `edit`, and its blobs.
+fn edited(name: &str, edit: impl Fn(&mut Value)) -> (DisplayList, list::Blobs) {
+    let mut value: Value = serde_json::from_str(&text_of(name)).unwrap();
+    edit(&mut value);
+    let list = list::parse(&value.to_string()).unwrap_or_else(|r| panic!("{name}: {r}"));
+    let blobs = read_blobs(&list, &lists().join("blobs")).unwrap();
+    (list, blobs)
+}
+
+/// *An archival claim is kept or refused* (Caster's DESIGN.md S109): under `info.archival` the file carries the PDF/A-4 identification, no document information dictionary and both output intents on one profile, and a list the file could not keep the claim for is refused by name; with no claim the file is what it was.
+#[test]
+fn the_archival_claim_is_written_or_refused() {
+    let claim = |v: &mut Value| v["info"]["archival"] = serde_json::json!("pdfa4");
+    let (plain, blobs) = list_of("roads");
+    let was = String::from_utf8_lossy(&write(&plain, &blobs).unwrap().bytes).into_owned();
+    assert!(!was.contains("pdfaid") && !was.contains("GTS_PDFA1") && was.contains("/CreationDate"), "no claim: no identification, one intent, the Info dictionary");
+    let (claimed, blobs) = edited("roads", claim);
+    let text = String::from_utf8_lossy(&write(&claimed, &blobs).unwrap().bytes).into_owned();
+    assert!(text.contains("<pdfaid:part>4</pdfaid:part>") && text.contains("<pdfaid:rev>2020</pdfaid:rev>") && !text.contains("pdfaid:conformance"), "the identification: part 4, rev 2020, no conformance");
+    assert!(!text.contains("/CreationDate") && !text.rsplit("trailer").next().unwrap().contains("/Info"), "no document information dictionary, and none in the trailer");
+    let profile = |subtype: &str| text.split(&format!("/S /{subtype}")).nth(1).and_then(|rest| rest.split("/DestOutputProfile ").nth(1)).map(|r| r.split(" R").next().unwrap().to_string());
+    assert!(profile("GTS_PDFX").is_some() && profile("GTS_PDFX") == profile("GTS_PDFA1"), "both intents name one profile object");
+
+    let refused = |list: &DisplayList, blobs: &list::Blobs| write(list, blobs).map(|_| ()).unwrap_err().message;
+    let (none, blobs) = edited("photo", claim);
+    assert_eq!(refused(&none, &blobs), "caster: the display list claims PDF/A-4 and carries no colour story, so no output intent would say what its colours mean (ISO 19005-4, 6.2.4.3)");
+    let story: Value = serde_json::from_str::<Value>(&text_of("roads")).unwrap()["writing"]["colour"].clone();
+    let (facsimile, blobs) = edited("facsimile", |v| {
+        claim(v);
+        v["writing"]["colour"] = story.clone();
+    });
+    assert_eq!(refused(&facsimile, &blobs), "caster: the facsimile at object[0] is page 2 of https://print.invalid/facsimile/fixture.pdf, a page of another PDF, which Caster copies as it is and does not read, so it cannot stand behind it under PDF/A-4; print without `a-4` in `standard`, or place the page as an image");
+    let (rgb, blobs) = edited("roads", |v| {
+        claim(v);
+        v["writing"]["colour"]["profiles"]["cmyk"] = v["writing"]["colour"]["profiles"]["srgb"].clone();
+    });
+    let refusal = write(&rgb, &blobs).map(|_| ()).unwrap_err();
+    assert!(refusal.message.contains(" is painted in CMYK") && refusal.message.ends_with("and no CMYK profile stands behind it: the output intent is an RGB profile, so the file could not say what the ink means, which PDF/A-4 asks of every colour (ISO 19005-4, 6.2.4.3); pass a CMYK profile as the `profile` option, or print without `a-4` in `standard`"), "{}", refusal.message);
+    assert!(refusal.list_item.is_some(), "the refusal names the item");
 }

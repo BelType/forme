@@ -230,6 +230,9 @@ pub struct DocumentInfo {
     pub title: Utf16,
     /// `tagged` once a guess in the tree withdrew the claim (*the printer guesses, says so, and withdraws the claim*, S90).
     pub conformance: Conformance,
+    /// The archival claim, `pdfa4` under Caster's `standard` with `a-4` (*an archival claim is kept or refused*): the file then carries the PDF/A-4 identification, no document information dictionary, and the archive's output intent beside the print shop's. Absent, the file makes none. Version 7, optional.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub archival: Option<Archival>,
     pub page_count: Num,
     /// The moment the file says it was made: an ISO 8601 instant in UTC, `YYYY-MM-DDTHH:mm:ss` with optional fractional seconds and a final `Z`, as `Date.prototype.toISOString` writes it. The writer writes it at whole seconds into both `/CreationDate` and `/ModDate`, and reads no clock. Version 3.
     pub created: String,
@@ -242,6 +245,14 @@ pub struct DocumentInfo {
 pub enum Conformance {
     Pdfua2,
     Tagged,
+}
+
+/// The archival claim a list makes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
+pub enum Archival {
+    Pdfa4,
 }
 
 /// How the writer writes what the rest of the list holds: the choices `print()` made from the flags. They change bytes and are not facts about the document, so they are kept apart from `info`. Version 3.
@@ -1561,8 +1572,9 @@ impl Read for PathSegment {
 // The readers: every struct with each field's key as the list spells it, every enum of unit variants with its strings. The key lists are checked against the schema's names by the corpus round trip (`tests/corpus.rs`), which writes each list back through serde's `Serialize` under the tests' `serde` feature.
 
 read_struct!(DisplayList { version: "version", info: "info", writing: "writing", resources: "resources", structure: "structure", outline: "outline", page_labels: "pageLabels", pages: "pages" });
-read_struct!(DocumentInfo { lang: "lang", title: "title", conformance: "conformance", page_count: "pageCount", created: "created" });
+read_struct!(DocumentInfo { lang: "lang", title: "title", conformance: "conformance", archival: "archival", page_count: "pageCount", created: "created" });
 read_enum!(Conformance { Pdfua2: "pdfua2", Tagged: "tagged" });
+read_enum!(Archival { Pdfa4: "pdfa4" });
 read_struct!(Writing { font_profile: "fontProfile", colour: "colour" });
 read_struct!(ColourWriting { profiles: "profiles", condition: "condition", info: "info", black_text: "blackText" });
 read_struct!(Profiles { cmyk: "cmyk", srgb: "srgb" });
