@@ -1,6 +1,6 @@
 //! The refusals of a list the writer could not write, each a sentence, before a byte is written: Caster's `validateList` (`src/displayList/validate.ts`), ported check for check, in its order, with its sentences.
 //!
-//! What it holds: the version (read first, by [`crate::list::parse`]); every blob key a resource names; each image's samples in a shape the schema names, as many bytes as it says (version 6; `DeviceCMYK` at four components and with neither palette nor profile, version 7); the font instances (unique keys, sorted widths, a width for every glyph a text item shows and every space glyph it names); under a PDF/UA-2 claim, no word gap of a face with no space glyph; every image and raster key a page item names; the marked content of each page (no end without a start, none left open); the links (`order` running 0, 1, 2 … over the document, a destination or a URI on each); the structure tree (an element index anywhere in range, one parent each, no cycle, a content child that is a content start naming its element back, every content start some element's child, a link child owned by the link's element, the attribute keys the schema names). What it leaves to the writer is what only writing finds. A number in a sentence is written as JavaScript's `String` writes it, so a sentence is the oracle's to the character.
+//! What it holds: the version (read first, by [`crate::list::parse`]); every blob key a resource names; each image's samples in a shape the schema names, as many bytes as it says (version 6; `DeviceCMYK` at four components and with neither palette nor profile, version 7); the font instances (unique keys, sorted widths, a width for every glyph a text item shows and every space glyph it names); under a PDF/UA-2 claim, no word gap of a face with no space glyph; every image and raster key a page item names; the marked content of each page (no end without a start, none left open); the links (`order` running 0, 1, 2 … over the document, a destination or a URI on each); the structure tree (an element index anywhere in range, one parent each, no cycle, a content child that is a content start naming its element back, every content start some element's child, a link child owned by the link's element, the attribute keys the schema names, a namespace that is the PDF 1.7 one where one is named, every `refs` index in range and none empty). What it leaves to the writer is what only writing finds. A number in a sentence is written as JavaScript's `String` writes it, so a sentence is the oracle's to the character.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -9,7 +9,10 @@ use crate::content::js_string;
 use crate::list::{Blobs, Conformance, DisplayList, Item, LinkItem, Num, StructChild, StructElement, TagStart, json_string};
 
 /// The keys an attribute object of `/A` may carry, which the writer writes in this order.
-pub const ATTRIBUTE_KEYS: [&str; 8] = ["O", "ListNumbering", "BBox", "Scope", "Headers", "RowSpan", "ColSpan", "TextPosition"];
+pub const ATTRIBUTE_KEYS: [&str; 9] = ["O", "ListNumbering", "BBox", "Scope", "Headers", "RowSpan", "ColSpan", "TextPosition", "NoteType"];
+
+/// The PDF 1.7 standard structure namespace, the one other namespace an element may name.
+pub const PDF_1_7_NAMESPACE: &str = "http://iso.org/pdf/ssn";
 
 /// Refuse a list the writer could not write.
 ///
@@ -252,6 +255,18 @@ fn check_tree(list: &DisplayList) -> Result<(), Refusal> {
         for attribute in element.attributes.iter().flatten() {
             if let Some((stray, _)) = attribute.0.iter().find(|(k, _)| !ATTRIBUTE_KEYS.contains(&k.as_str())) {
                 return Err(Refusal::new(format!("caster: {place} carries an attribute object with the key {stray}, which the schema does not name")));
+            }
+        }
+        if let Some(namespace) = element.namespace.as_deref().filter(|n| *n != PDF_1_7_NAMESPACE) {
+            let units: Vec<u16> = namespace.encode_utf16().collect();
+            return Err(Refusal::new(format!("caster: {place} names the namespace {}; an element is in the PDF 2.0 namespace or names {PDF_1_7_NAMESPACE}", json_string(&units))));
+        }
+        if let Some(refs) = &element.refs {
+            if refs.is_empty() {
+                return Err(Refusal::new(format!("caster: {place} carries an empty refs; an element that refers to none carries none")));
+            }
+            for &r in refs {
+                element_at(elements, r, &format!("the Ref of {place}"))?;
             }
         }
         for child in &element.children {

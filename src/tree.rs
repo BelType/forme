@@ -1,6 +1,6 @@
 //! The structure tree and everything that points into it, ported from `buildStructure` and the page-label block of Caster's `src/emit/structureEmit.ts` and from `src/emit/outline.ts`.
 //!
-//! - **The tree is the list's**: elements allocated in the array's order before any dictionary is written, each from its fields, `/K` from `children` in order, `/P` from the element that lists it, the PDF 2.0 namespace on every element. An element whose content is all on one page carries `/Pg` and bare MCIDs; content on two pages is named per item by `/MCR`. Attribute objects are written `/O` first and then in the schema's key order, every string a name but each `Headers` entry, a byte string; one object is `/A` itself, more are an array.
+//! - **The tree is the list's**: elements allocated in the array's order before any dictionary is written, each from its fields, `/K` from `children` in order, `/P` from the element that lists it, the PDF 2.0 namespace on every element but one whose `namespace` names the PDF 1.7 one, whose object is written only in a file that uses it, and `/Ref` only on an element that refers to some. An element whose content is all on one page carries `/Pg` and bare MCIDs; content on two pages is named per item by `/MCR`. Attribute objects are written `/O` first and then in the schema's key order, every string a name but each `Headers` entry, a byte string; one object is `/A` itself, more are an array.
 //! - **The ParentTree** is one flat number tree: one array per page indexed by MCID, keyed by the page's index (its `/StructParents`), then one entry per link, keyed by the page count plus the link's `order` (its `/StructParent`). The IDTree is one flat name tree, sorted by UTF-16 code unit, and two elements with one `/ID` are refused.
 //! - **A link** is an annotation with `/Rect` the union of its `/QuadPoints`, `/F 4`, `/Border [0 0 0]`, `/Contents`, `/StructParent` and `/P`, and either a `/URI` action or a structure destination `[element /XYZ x y null]`, and an `/OBJR` in its element's `/K`.
 //! - **The outline** nests by level, every item open, each destination `[element /XYZ null top null]`; `/PageLabels` opens with an empty dictionary when the first run is not on the first page.
@@ -10,9 +10,10 @@ use pdf_writer::{Finish, Name, Obj, Pdf, Ref, Str, TextStr};
 use crate::Refusal;
 use crate::list::{Attribute, DisplayList, Item, LinkItem, StructChild};
 use crate::read::Value;
+use crate::validate::PDF_1_7_NAMESPACE;
 
 /// The validator's `ATTRIBUTE_KEYS`: the order an attribute object's keys are written in.
-const ATTRIBUTE_KEYS: [&str; 8] = ["O", "ListNumbering", "BBox", "Scope", "Headers", "RowSpan", "ColSpan", "TextPosition"];
+const ATTRIBUTE_KEYS: [&str; 9] = ["O", "ListNumbering", "BBox", "Scope", "Headers", "RowSpan", "ColSpan", "TextPosition", "NoteType"];
 
 /// The PDF 2.0 standard structure namespace; every element points at it.
 pub const PDF_2_NAMESPACE: &str = "http://iso.org/pdf2/ssn";
@@ -49,6 +50,12 @@ pub fn write(pdf: &mut Pdf, next: &mut Ref, list: &DisplayList, pages: &[Ref], m
 
     let namespace = next.bump();
     pdf.indirect(namespace).dict().pair(Name(b"Type"), Name(b"Namespace")).pair(Name(b"NS"), TextStr(PDF_2_NAMESPACE));
+    // The PDF 1.7 namespace object only in a file one element names it in, allocated right after the 2.0 one, so a file with none is the file it was.
+    let older = elements.iter().any(|e| e.namespace.is_some()).then(|| {
+        let id = next.bump();
+        pdf.indirect(id).dict().pair(Name(b"Type"), Name(b"Namespace")).pair(Name(b"NS"), TextStr(PDF_1_7_NAMESPACE));
+        id
+    });
     let annot_refs: Vec<Ref> = links.iter().map(|_| next.bump()).collect();
     let refs: Vec<Ref> = elements.iter().map(|_| next.bump()).collect();
     let root = next.bump();
@@ -97,7 +104,7 @@ pub fn write(pdf: &mut Pdf, next: &mut Ref, list: &DisplayList, pages: &[Ref], m
         let mut dict = pdf.indirect(id).dict();
         dict.pair(Name(b"Type"), Name(b"StructElem"));
         dict.pair(Name(b"S"), Name(element.element_type.as_bytes()));
-        dict.pair(Name(b"NS"), namespace);
+        dict.pair(Name(b"NS"), if element.namespace.is_some() { older.unwrap_or(namespace) } else { namespace });
         dict.pair(Name(b"P"), parent[index].map_or(root, |p| refs[p]));
         if one_page {
             dict.pair(Name(b"Pg"), pages[contents[0].0]);
@@ -124,6 +131,9 @@ pub fn write(pdf: &mut Pdf, next: &mut Ref, list: &DisplayList, pages: &[Ref], m
                     attribute(array.push(), a);
                 }
             }
+        }
+        if let Some(targets) = &element.refs {
+            dict.insert(Name(b"Ref")).array().items(targets.iter().map(|t| refs[t.0 as usize]));
         }
         let mut kids = dict.insert(Name(b"K")).array();
         for child in &element.children {
@@ -191,7 +201,12 @@ pub fn write(pdf: &mut Pdf, next: &mut Ref, list: &DisplayList, pages: &[Ref], m
         let mut dict = pdf.indirect(root).dict();
         dict.pair(Name(b"Type"), Name(b"StructTreeRoot"));
         dict.insert(Name(b"K")).array().item(refs[0]);
-        dict.insert(Name(b"Namespaces")).array().item(namespace);
+        let mut namespaces = dict.insert(Name(b"Namespaces")).array();
+        namespaces.item(namespace);
+        if let Some(older) = older {
+            namespaces.item(older);
+        }
+        namespaces.finish();
         dict.pair(Name(b"ParentTree"), parent_tree);
         dict.pair(Name(b"ParentTreeNextKey"), (page_count + by_annot.len()) as i32);
         if let Some(id_tree) = id_tree {

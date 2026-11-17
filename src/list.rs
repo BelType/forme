@@ -1313,9 +1313,12 @@ pub struct Structure {
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 pub struct StructElement {
-    /// The PDF 2.0 standard-namespace structure type, `/S`.
+    /// The structure type, `/S`: of the PDF 2.0 standard namespace, or of the PDF 1.7 one where `namespace` names it.
     #[cfg_attr(feature = "serde", serde(rename = "type"))]
     pub element_type: String,
+    /// `/NS`, where it is not the PDF 2.0 namespace: the PDF 1.7 one, `http://iso.org/pdf/ssn`, which holds the types PDF 2.0 left out of its own. Version 7, optional.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub namespace: Option<String>,
     /// The walk's structure path, e.g. `Document/Sect[0]/P[2]`. Only the report reads it.
     pub path: String,
     /// `/Lang`, a byte string. Each of the four entries is present only when it is written.
@@ -1333,6 +1336,9 @@ pub struct StructElement {
     /// `/A`: the attribute objects in the order they are written; one is written as the dictionary itself, more than one as an array. Absent when there is none.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub attributes: Option<Vec<Attribute>>,
+    /// `/Ref`: the elements this one refers to, by index, in the order written; absent when it refers to none, never empty. Version 7, optional.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub refs: Option<Vec<Num>>,
     /// `/K` in reading order. The order is data: the writer writes `/K` in it.
     pub children: Vec<StructChild>,
 }
@@ -1621,7 +1627,7 @@ read_struct!(LinkTarget { href: "href", kind: "kind", target_id: "targetId", des
 read_enum!(LinkKind { Internal: "internal", External: "external", Mailto: "mailto" });
 read_struct!(Dest { page: "page", x: "x", y: "y", element: "element", struct_path: "struct" });
 read_struct!(Structure { elements: "elements" });
-read_struct!(StructElement { element_type: "type", path: "path", lang: "lang", alt: "alt", expansion: "expansion", id: "id", attributes: "attributes", children: "children" });
+read_struct!(StructElement { element_type: "type", namespace: "namespace", path: "path", lang: "lang", alt: "alt", expansion: "expansion", id: "id", attributes: "attributes", refs: "refs", children: "children" });
 read_struct!(ContentChild { page: "page", item: "item" });
 read_struct!(LinkChild { link: "link" });
 read_struct!(TagStartItem { kind: "kind", start: "start" });
