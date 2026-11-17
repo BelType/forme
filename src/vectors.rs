@@ -229,7 +229,7 @@ impl<'a> Vectors<'a> {
         Self { pdf, next, list, images, shadings: Vec::new(), patterns: Vec::new(), states: Vec::new(), forms: 0, shared: Vec::new(), has_colour, srgb: None, paint: Vec::new() }
     }
 
-    /// The document's sRGB profile as the blending space of a group that holds a blend, allocated on first use; nothing with no colour story, where `/DeviceRGB` stands.
+    /// The document's sRGB profile as the blending space of every transparency group and of a page that holds a blend, allocated on first use; nothing with no colour story, where `/DeviceRGB` stands.
     pub fn blending_space(&mut self) -> Option<Ref> {
         if !self.has_colour {
             return None;
@@ -294,8 +294,7 @@ impl<'a> Vectors<'a> {
                     for child in &g.items {
                         self.emit(&mut content, child.into(), &mut inner, info)?;
                     }
-                    let space = if g.items.iter().any(|i| holds_open_blend(i.into())) { self.blending_space() } else { None };
-                    let (name, id) = self.transparency_form(&g.bbox, content, &inner, space);
+                    let (name, id) = self.transparency_form(&g.bbox, content, &inner);
                     put(&mut scope.xobjects, &name, id);
                     self.state_for(c, &p, scope, info, with_backdrop);
                     c.op(&[Operand::Name(&name)], "Do");
@@ -484,7 +483,7 @@ impl<'a> Vectors<'a> {
         for child in &mask.items {
             self.emit(&mut content, child.into(), &mut inner, info)?;
         }
-        let (name, id) = self.transparency_form(&mask.bbox, content, &inner, None);
+        let (name, id) = self.transparency_form(&mask.bbox, content, &inner);
         let reason = opt_st(p.origin.mask_reason.as_deref());
         self.row(&p.origin.dom_path, info, "smask", format!("{}:mask", p.origin.label), &[("geometry", nums(&mask.bbox, round3)), ("reason", reason), ("form", st(&name))]);
         Ok(Some(id))
@@ -501,15 +500,16 @@ impl<'a> Vectors<'a> {
         clip_operators(&mut content, path, if even { FillRule::Evenodd } else { FillRule::Nonzero });
         content.op(&ops_num(&g.matrix), "cm").op(&[Operand::Name(&alpha)], "sh").op(&[], "Q");
         let bbox_nums = bbox.map(Num);
-        let (name, id) = self.transparency_form(&bbox_nums, content, &inner, None);
+        let (name, id) = self.transparency_form(&bbox_nums, content, &inner);
         self.row(&origin.dom_path, info, "smask", format!("{}:alpha-stops", origin.label), &[("geometry", r3(&bbox)), ("reason", st("the gradient has stops with alpha below one")), ("form", st(&name)), ("params", shading_record(g, &alpha, domain, None))]);
         Ok(id)
     }
 
-    /// A transparency-group form, `/I true /K false`, each its own.
-    fn transparency_form(&mut self, bbox: &BoxPt, content: Content, scope: &Scope, space: Option<Ref>) -> (String, Ref) {
+    /// A transparency-group form, `/I true /K false`, each its own, whose `/CS` is the document's sRGB profile under a colour story and `/DeviceRGB` with none: every group names the managed colour space where colour management is on (*an archival claim is kept or refused*, 2026-11-17), where before only a group that held a blend did.
+    fn transparency_form(&mut self, bbox: &BoxPt, content: Content, scope: &Scope) -> (String, Ref) {
         let name = format!("Fm{}", self.forms);
         self.forms += 1;
+        let space = self.blending_space();
         (name, self.form_stream(bbox, content, scope, true, space))
     }
 
