@@ -1,9 +1,9 @@
 //! The structure tree and everything that points into it, ported from `buildStructure` and the page-label block of Caster's `src/emit/structureEmit.ts` and from `src/emit/outline.ts`.
 //!
-//! - **The tree is the list's**: elements allocated in the array's order before any dictionary is written, each from its fields, `/K` from `children` in order, `/P` from the element that lists it, the PDF 2.0 namespace on every element but one whose `namespace` names the PDF 1.7 one, whose object is written only in a file that uses it, and `/Ref` only on an element that refers to some. An element whose content is all on one page carries `/Pg` and bare MCIDs; content on two pages is named per item by `/MCR`. Attribute objects are written `/O` first and then in the schema's key order, every string a name but each `Headers` entry, a byte string; one object is `/A` itself, more are an array.
+//! - **The tree is the list's**: elements allocated in the array's order before any dictionary is written, each from its fields (in a PDF 1.7 file with no namespace object, no `/NS` and the list's `/RoleMap`), `/K` from `children` in order, `/P` from the element that lists it, the PDF 2.0 namespace on every element but one whose `namespace` names the PDF 1.7 one, whose object is written only in a file that uses it, and `/Ref` only on an element that refers to some. An element whose content is all on one page carries `/Pg` and bare MCIDs; content on two pages is named per item by `/MCR`. Attribute objects are written `/O` first and then in the schema's key order, every string a name but each `Headers` entry, a byte string; one object is `/A` itself, more are an array.
 //! - **The ParentTree** is one flat number tree: one array per page indexed by MCID, keyed by the page's index (its `/StructParents`), then one entry per link, keyed by the page count plus the link's `order` (its `/StructParent`). The IDTree is one flat name tree, sorted by UTF-16 code unit, and two elements with one `/ID` are refused.
 //! - **A link** is an annotation with `/Rect` the union of its `/QuadPoints`, `/F 4`, `/Border [0 0 0]`, `/Contents`, `/StructParent` and `/P`, and either a `/URI` action or a structure destination `[element /XYZ x y null]`, and an `/OBJR` in its element's `/K`.
-//! - **The outline** nests by level, every item open, each destination `[element /XYZ null top null]`; `/PageLabels` opens with an empty dictionary when the first run is not on the first page.
+//! - **The outline** nests by level, every item open, each destination `[element /XYZ null top null]`, and in a PDF 1.7 file, which has no structure destinations, `[page /XYZ null top null]`, as a link's is (Caster's DESIGN.md S110); `/PageLabels` opens with an empty dictionary when the first run is not on the first page.
 
 use pdf_writer::{Finish, Name, Obj, Pdf, Ref, Str, TextStr};
 
@@ -48,8 +48,12 @@ pub fn write(pdf: &mut Pdf, next: &mut Ref, list: &DisplayList, pages: &[Ref], m
     let mut links: Vec<(&LinkItem, usize)> = list.pages.iter().enumerate().flat_map(|(p, page)| page.items.iter().filter_map(move |item| if let Item::Link(link) = item { Some((link, p)) } else { None })).collect();
     links.sort_by(|a, b| a.0.order.0.total_cmp(&b.0.order.0));
 
-    let namespace = next.bump();
-    pdf.indirect(namespace).dict().pair(Name(b"Type"), Name(b"Namespace")).pair(Name(b"NS"), TextStr(PDF_2_NAMESPACE));
+    // A PDF 1.7 file has no namespaces, and names a page, not an element, in every destination (*a PDF 1.7 file reads the tag table backwards*, Caster's DESIGN.md S110).
+    let pdf17 = list.info.pdf.is_some();
+    let namespace = (!pdf17).then(|| next.bump());
+    if let Some(namespace) = namespace {
+        pdf.indirect(namespace).dict().pair(Name(b"Type"), Name(b"Namespace")).pair(Name(b"NS"), TextStr(PDF_2_NAMESPACE));
+    }
     // The PDF 1.7 namespace object only in a file one element names it in, allocated right after the 2.0 one, so a file with none is the file it was.
     let older = elements.iter().any(|e| e.namespace.is_some()).then(|| {
         let id = next.bump();
@@ -80,7 +84,7 @@ pub fn write(pdf: &mut Pdf, next: &mut Ref, list: &DisplayList, pages: &[Ref], m
         annot.pair(Name(b"P"), pages[*page]);
         if let Some(dest) = &link.target.dest {
             let mut array = annot.insert(Name(b"Dest")).array();
-            array.item(refs[dest.element.0 as usize]).item(Name(b"XYZ")).item(dest.x.0 as f32).item(dest.y.0 as f32);
+            array.item(if pdf17 { pages[dest.page.0 as usize] } else { refs[dest.element.0 as usize] }).item(Name(b"XYZ")).item(dest.x.0 as f32).item(dest.y.0 as f32);
             array.push().primitive(pdf_writer::Null);
         }
         annots[*page].push(id);
@@ -104,7 +108,9 @@ pub fn write(pdf: &mut Pdf, next: &mut Ref, list: &DisplayList, pages: &[Ref], m
         let mut dict = pdf.indirect(id).dict();
         dict.pair(Name(b"Type"), Name(b"StructElem"));
         dict.pair(Name(b"S"), Name(element.element_type.as_bytes()));
-        dict.pair(Name(b"NS"), if element.namespace.is_some() { older.unwrap_or(namespace) } else { namespace });
+        if let Some(namespace) = namespace {
+            dict.pair(Name(b"NS"), if element.namespace.is_some() { older.unwrap_or(namespace) } else { namespace });
+        }
         dict.pair(Name(b"P"), parent[index].map_or(root, |p| refs[p]));
         if one_page {
             dict.pair(Name(b"Pg"), pages[contents[0].0]);
@@ -201,12 +207,20 @@ pub fn write(pdf: &mut Pdf, next: &mut Ref, list: &DisplayList, pages: &[Ref], m
         let mut dict = pdf.indirect(root).dict();
         dict.pair(Name(b"Type"), Name(b"StructTreeRoot"));
         dict.insert(Name(b"K")).array().item(refs[0]);
-        let mut namespaces = dict.insert(Name(b"Namespaces")).array();
-        namespaces.item(namespace);
-        if let Some(older) = older {
-            namespaces.item(older);
+        if let Some(namespace) = namespace {
+            let mut namespaces = dict.insert(Name(b"Namespaces")).array();
+            namespaces.item(namespace);
+            if let Some(older) = older {
+                namespaces.item(older);
+            }
+            namespaces.finish();
         }
-        namespaces.finish();
+        if let Some(role_map) = &list.structure.role_map {
+            let mut map = dict.insert(Name(b"RoleMap")).dict();
+            for entry in role_map {
+                map.pair(Name(entry.custom.as_bytes()), Name(entry.mapped.as_bytes()));
+            }
+        }
         dict.pair(Name(b"ParentTree"), parent_tree);
         dict.pair(Name(b"ParentTreeNextKey"), (page_count + by_annot.len()) as i32);
         if let Some(id_tree) = id_tree {
@@ -214,7 +228,9 @@ pub fn write(pdf: &mut Pdf, next: &mut Ref, list: &DisplayList, pages: &[Ref], m
         }
     }
 
-    let outlines = outline(pdf, next, list, &refs);
+    // Each bookmark's destination: its heading's element, or in a 1.7 file the heading's page.
+    let heads: Vec<Ref> = list.outline.iter().map(|h| if pdf17 { pages[h.page.0 as usize] } else { refs[h.element.0 as usize] }).collect();
+    let outlines = outline(pdf, next, list, &heads);
     let page_labels = page_labels(pdf, next, list);
     Ok(Tree { root, outlines, page_labels, annots })
 }
@@ -279,7 +295,8 @@ fn descendants(node: &Node) -> i32 {
 }
 
 /// The outline, nested by level as `treeOf` nests it, every item open, allocated depth first and then the `/Outlines` dictionary.
-fn outline(pdf: &mut Pdf, next: &mut Ref, list: &DisplayList, refs: &[Ref]) -> Option<Ref> {
+/// `heads` is each entry's destination, by its index in `list.outline`.
+fn outline(pdf: &mut Pdf, next: &mut Ref, list: &DisplayList, heads: &[Ref]) -> Option<Ref> {
     if list.outline.is_empty() {
         return None;
     }
@@ -328,7 +345,7 @@ fn outline(pdf: &mut Pdf, next: &mut Ref, list: &DisplayList, refs: &[Ref]) -> O
                 item.pair(Name(b"Count"), count);
             }
             let mut dest = item.insert(Name(b"Dest")).array();
-            dest.item(refs[heading.element.0 as usize]).item(Name(b"XYZ"));
+            dest.item(refs[node.entry]).item(Name(b"XYZ"));
             dest.push().primitive(pdf_writer::Null);
             dest.item(heading.top_pt.0 as f32);
             dest.push().primitive(pdf_writer::Null);
@@ -337,7 +354,7 @@ fn outline(pdf: &mut Pdf, next: &mut Ref, list: &DisplayList, refs: &[Ref]) -> O
             fill(pdf, list, refs, &node.kids, node.id);
         }
     }
-    fill(pdf, list, refs, &roots, outlines);
+    fill(pdf, list, heads, &roots, outlines);
     let total: i32 = roots.iter().map(|r| 1 + descendants(r)).sum();
     pdf.indirect(outlines).dict().pair(Name(b"Type"), Name(b"Outlines")).pair(Name(b"First"), roots[0].id).pair(Name(b"Last"), roots[roots.len() - 1].id).pair(Name(b"Count"), total);
     Some(outlines)

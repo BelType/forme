@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::Refusal;
 use crate::content::js_string;
-use crate::list::{BlackTextPolicy, Blobs, Conformance, DisplayList, Fill, Item, LinkItem, Num, Paint, RectItem, ShadingSpace, StructChild, StructElement, TagStart, TextItem, VectorItem, json_string};
+use crate::list::{Archival, BlackTextPolicy, Blobs, Conformance, DisplayList, Fill, Item, LinkItem, Num, Paint, RectItem, ShadingSpace, StructChild, StructElement, TagStart, TextItem, VectorItem, json_string};
 
 /// The keys an attribute object of `/A` may carry, which the writer writes in this order.
 pub const ATTRIBUTE_KEYS: [&str; 9] = ["O", "ListNumbering", "BBox", "Scope", "Headers", "RowSpan", "ColSpan", "TextPosition", "NoteType"];
@@ -22,6 +22,7 @@ pub fn validate(list: &DisplayList, blobs: &Blobs) -> Result<(), Refusal> {
     if list.version.0 != crate::list::LIST_VERSION {
         return Err(Refusal::new(format!("caster: the writer reads a display list of version {}, and this one is version {}; a list is written again by print(), never upgraded", js_string(crate::list::LIST_VERSION), js_string(list.version.0))));
     }
+    check_version(list)?;
     check_blobs(list, blobs)?;
     check_samples(list, blobs)?;
     check_fonts(list)?;
@@ -30,6 +31,30 @@ pub fn validate(list: &DisplayList, blobs: &Blobs) -> Result<(), Refusal> {
     check_items(list)?;
     check_links(list)?;
     check_tree(list)
+}
+
+/// The claims fit the file's version, and a PDF 1.7 list holds nothing a 1.7 file cannot say (*the PDF 1.7 family joins the list* and *a PDF 1.7 file reads the tag table backwards*, Caster's DESIGN.md S110): `pdfua2` and `pdfa4` are PDF 2.0 claims, `pdfua1` and the PDF/A-2 levels PDF 1.7 ones; a 1.7 list names no namespace and no `refs`, and only a 1.7 list carries a role map.
+fn check_version(list: &DisplayList) -> Result<(), Refusal> {
+    let older = list.info.pdf.is_some();
+    let version = |is_older: bool| if is_older { "1.7" } else { "2.0" };
+    let claims = [(list.info.conformance != Conformance::Tagged).then(|| (if list.info.conformance == Conformance::Pdfua1 { "pdfua1" } else { "pdfua2" }, list.info.conformance == Conformance::Pdfua1)), list.info.archival.map(|a| (match a { Archival::Pdfa4 => "pdfa4", Archival::Pdfa2b => "pdfa2b", Archival::Pdfa2u => "pdfa2u", Archival::Pdfa2a => "pdfa2a" }, a != Archival::Pdfa4))];
+    for (claim, needs17) in claims.into_iter().flatten() {
+        if needs17 != older {
+            return Err(Refusal::new(format!("caster: the display list claims {claim}, a claim on PDF {}, and its file is PDF {}; a claim fixes the version", version(needs17), version(older))));
+        }
+    }
+    if !older {
+        if list.structure.role_map.is_some() {
+            return Err(Refusal::new("caster: the display list carries a role map and its file is PDF 2.0; only a PDF 1.7 file writes the custom types a role map names".into()));
+        }
+        return Ok(());
+    }
+    for (index, element) in list.structure.elements.iter().enumerate() {
+        if element.namespace.is_some() || element.refs.is_some() {
+            return Err(Refusal::new(format!("caster: structure element {index} ({}) {} in a PDF 1.7 list, and a PDF 1.7 file has neither namespaces nor the /Ref key", element.path, if element.namespace.is_some() { "names a namespace" } else { "carries refs" })));
+        }
+    }
+    Ok(())
 }
 
 /// Each image's samples in a shape the schema names, holding as many bytes as the shape says (version 6; `DeviceCMYK` at four components and with neither palette nor profile, version 7).
@@ -128,21 +153,23 @@ fn check_fonts(list: &DisplayList) -> Result<(), Refusal> {
 
 /// A list that claims PDF/A-4 is one the file can keep it for, or it is refused by name (*an archival claim is kept or refused*, Caster's DESIGN.md S109): it carries a colour story, so its device colour has an output intent; it places no page of another PDF, which the writer copies as it is and does not read; and no colour in it is CMYK unless the output profile is a CMYK one. CMYK is a declared ink (process or spot, whose alternate is CMYK) on a run or a rectangle, black text under `blackText: '100k'`, a vector paint or gradient in CMYK, print marks (the `/All` separation), and an image whose samples are `DeviceCMYK` or whose file is a four-component JPEG. The facsimiles are read by image key, then the pages' items in order, then the forms by name.
 fn check_archival(list: &DisplayList, blobs: &Blobs) -> Result<(), Refusal> {
-    if list.info.archival.is_none() {
+    let Some(archival) = list.info.archival else {
         return Ok(());
-    }
+    };
+    // A PDF/A-2 claim is held to the same rules, in PDF/A-2's words (S110).
+    let (claim, iso, member) = if archival == Archival::Pdfa4 { ("PDF/A-4", "ISO 19005-4", "`a-4`") } else { ("PDF/A-2", "ISO 19005-2", "the PDF/A-2 member") };
     let Some(story) = &list.writing.colour else {
-        return Err(Refusal::new("caster: the display list claims PDF/A-4 and carries no colour story, so no output intent would say what its colours mean (ISO 19005-4, 6.2.4.3)".into()));
+        return Err(Refusal::new(format!("caster: the display list claims {claim} and carries no colour story, so no output intent would say what its colours mean ({iso}, 6.2.4.3)")));
     };
     for image in list.resources.images.values() {
         if let Some(f) = &image.facsimile {
-            return Err(Refusal::new(format!("caster: the facsimile at {} is page {} of {}, a page of another PDF, which Caster copies as it is and does not read, so it cannot stand behind it under PDF/A-4; print without `a-4` in `standard`, or place the page as an image", image.dom_path, js_string(f.page.0), f.url)));
+            return Err(Refusal::new(format!("caster: the facsimile at {} is page {} of {}, a page of another PDF, which Caster copies as it is and does not read, so it cannot stand behind it under {claim}; print without {member} in `standard`, or place the page as an image", image.dom_path, js_string(f.page.0), f.url)));
         }
     }
     if blobs[&story.profiles.cmyk].get(16..20) == Some(b"CMYK") {
         return Ok(());
     }
-    let refusal = |what: String| format!("caster: {what}, and no CMYK profile stands behind it: the output intent is an RGB profile, so the file could not say what the ink means, which PDF/A-4 asks of every colour (ISO 19005-4, 6.2.4.3); pass a CMYK profile as the `profile` option, or print without `a-4` in `standard`");
+    let refusal = |what: String| format!("caster: {what}, and no CMYK profile stands behind it: the output intent is an RGB profile, so the file could not say what the ink means, which {claim} asks of every colour ({iso}, 6.2.4.3); pass a CMYK profile as the `profile` option, or print without {member} in `standard`");
     let inked = |fill: &Fill| fill.ink.is_some();
     for (p, page) in list.pages.iter().enumerate() {
         for (at, item) in page.items.iter().enumerate() {
@@ -217,9 +244,11 @@ fn mask_cmyk(mask: &Option<crate::list::SoftMask>) -> bool {
 
 /// A list that claims PDF/UA-2 shows no word gap as glyph 0 (*PDF/UA-2 is a flag, not a given*, Caster's DESIGN.md S103): a text item's `space` is 0 when its face has no space glyph, and a gap it owes (`leadingSpace`, or `spaceBefore` past the first segment) would show `.notdef`, which PDF/UA-2 forbids (ISO 14289-2, 8.4.5.9). Under a list that claims nothing the writer writes such a gap as positioning with no glyph.
 fn check_gaps(list: &DisplayList) -> Result<(), Refusal> {
-    if list.info.conformance != Conformance::Pdfua2 {
+    if list.info.conformance == Conformance::Tagged {
         return Ok(());
     }
+    // PDF/UA-1 forbids `.notdef` too (ISO 14289-1, 7.21.8; S110).
+    let ua1 = list.info.conformance == Conformance::Pdfua1;
     for (p, page) in list.pages.iter().enumerate() {
         for (at, item) in page.items.iter().enumerate() {
             let Item::Text(text) = item else { continue };
@@ -227,6 +256,9 @@ fn check_gaps(list: &DisplayList) -> Result<(), Refusal> {
                 continue;
             }
             let family = list.resources.fonts.iter().find(|instance| instance.key == text.font).map(|instance| instance.family.as_str()).filter(|family| !family.is_empty()).unwrap_or(&text.font);
+            if ua1 {
+                return Err(Refusal::at(format!("caster: the face {family} ({}) has no space glyph, so the word gap in text item {at} of page {} would be glyph 0, .notdef, which PDF/UA-1 forbids a file to show (ISO 14289-1, 7.21.8); give the text a face with a space, or print with `standard: 'pdf-1.7'`, or a PDF/A-2 member alone, which do not claim PDF/UA-1 and write the gap as positioning with no glyph", text.font, p + 1), p, at));
+            }
             return Err(Refusal::at(format!("caster: the face {family} ({}) has no space glyph, so the word gap in text item {at} of page {} would be glyph 0, .notdef, which PDF/UA-2 forbids a file to show (ISO 14289-2, 8.4.5.9); give the text a face with a space, or print with `standard: 'none'`, or `'a-4'` alone, which do not claim PDF/UA-2 and write the gap as positioning with no glyph", text.font, p + 1), p, at));
         }
     }

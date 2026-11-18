@@ -228,9 +228,12 @@ pub struct DocumentInfo {
     /// The catalog `/Lang`.
     pub lang: String,
     pub title: Utf16,
-    /// `tagged` once a guess in the tree withdrew the claim (*the printer guesses, says so, and withdraws the claim*, S90).
+    /// The file's version where it is not PDF 2.0: `1.7` under a member of Caster's PDF 1.7 family (*the PDF 1.7 family joins the list*, Caster's DESIGN.md S110). Absent, the file is PDF 2.0. Version 7, optional.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub pdf: Option<PdfVersion>,
+    /// `tagged` once a guess in the tree withdrew the claim (*the printer guesses, says so, and withdraws the claim*, S90); `pdfua1`, in a 1.7 list alone, claims PDF/UA-1 (S110).
     pub conformance: Conformance,
-    /// The archival claim, `pdfa4` under Caster's `standard` with `a-4` (*an archival claim is kept or refused*): the file then carries the PDF/A-4 identification, no document information dictionary, and the archive's output intent beside the print shop's. Absent, the file makes none. Version 7, optional.
+    /// The archival claim, `pdfa4` under Caster's `standard` with `a-4` (*an archival claim is kept or refused*): the file then carries the PDF/A-4 identification, no document information dictionary, and the archive's output intent beside the print shop's. `pdfa2b`, `pdfa2u` and `pdfa2a`, in a 1.7 list alone, claim PDF/A-2 at its level: its identification and conformance, the dates beside the information dictionary the file keeps, and the archive's output intent (S110). Absent, the file makes none. Version 7, optional.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub archival: Option<Archival>,
     pub page_count: Num,
@@ -238,12 +241,21 @@ pub struct DocumentInfo {
     pub created: String,
 }
 
-/// Whether the file claims PDF/UA-2.
+/// The file's version where it is not PDF 2.0.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub enum PdfVersion {
+    #[cfg_attr(feature = "serde", serde(rename = "1.7"))]
+    V1_7,
+}
+
+/// Whether the file claims PDF/UA-2, or PDF/UA-1 in a 1.7 file.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 pub enum Conformance {
     Pdfua2,
+    Pdfua1,
     Tagged,
 }
 
@@ -253,6 +265,21 @@ pub enum Conformance {
 #[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 pub enum Archival {
     Pdfa4,
+    Pdfa2b,
+    Pdfa2u,
+    Pdfa2a,
+}
+
+impl Archival {
+    /// The PDF/A-2 conformance level, `B`, `U` or `A`; none for PDF/A-4, which has no level.
+    pub fn level(self) -> Option<&'static str> {
+        match self {
+            Archival::Pdfa4 => None,
+            Archival::Pdfa2b => Some("B"),
+            Archival::Pdfa2u => Some("U"),
+            Archival::Pdfa2a => Some("A"),
+        }
+    }
 }
 
 /// How the writer writes what the rest of the list holds: the choices `print()` made from the flags. They change bytes and are not facts about the document, so they are kept apart from `info`. Version 3.
@@ -1320,6 +1347,19 @@ pub struct Dest {
 pub struct Structure {
     /// The order is data: the order the writer allocates the elements' objects in, which every index into the array names.
     pub elements: Vec<StructElement>,
+    /// The `/RoleMap` of a PDF 1.7 file: each custom type its elements use, mapped to the PDF 1.7 type nearest it, in the order written (*a PDF 1.7 file reads the tag table backwards*, S110). Absent in a PDF 2.0 file. Version 7, optional.
+    #[cfg_attr(feature = "serde", serde(rename = "roleMap", skip_serializing_if = "Option::is_none"))]
+    pub role_map: Option<Vec<RoleMapEntry>>,
+}
+
+/// One entry of the role map: a custom type and the standard one it is mapped to.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+pub struct RoleMapEntry {
+    #[cfg_attr(feature = "serde", serde(rename = "type"))]
+    pub custom: String,
+    pub mapped: String,
 }
 
 /// One structure element, as its dictionary is written.
@@ -1575,9 +1615,10 @@ impl Read for PathSegment {
 // The readers: every struct with each field's key as the list spells it, every enum of unit variants with its strings. The key lists are checked against the schema's names by the corpus round trip (`tests/corpus.rs`), which writes each list back through serde's `Serialize` under the tests' `serde` feature.
 
 read_struct!(DisplayList { version: "version", info: "info", writing: "writing", resources: "resources", structure: "structure", outline: "outline", page_labels: "pageLabels", pages: "pages" });
-read_struct!(DocumentInfo { lang: "lang", title: "title", conformance: "conformance", archival: "archival", page_count: "pageCount", created: "created" });
-read_enum!(Conformance { Pdfua2: "pdfua2", Tagged: "tagged" });
-read_enum!(Archival { Pdfa4: "pdfa4" });
+read_struct!(DocumentInfo { lang: "lang", title: "title", pdf: "pdf", conformance: "conformance", archival: "archival", page_count: "pageCount", created: "created" });
+read_enum!(PdfVersion { V1_7: "1.7" });
+read_enum!(Conformance { Pdfua2: "pdfua2", Pdfua1: "pdfua1", Tagged: "tagged" });
+read_enum!(Archival { Pdfa4: "pdfa4", Pdfa2b: "pdfa2b", Pdfa2u: "pdfa2u", Pdfa2a: "pdfa2a" });
 read_struct!(Writing { font_profile: "fontProfile", colour: "colour" });
 read_struct!(ColourWriting { profiles: "profiles", condition: "condition", info: "info", black_text: "blackText" });
 read_struct!(Profiles { cmyk: "cmyk", srgb: "srgb" });
@@ -1641,7 +1682,8 @@ read_struct!(LinkItem { kind: "kind", element: "element", order: "order", rects:
 read_struct!(LinkTarget { href: "href", kind: "kind", target_id: "targetId", dest: "dest", uri: "uri" });
 read_enum!(LinkKind { Internal: "internal", External: "external", Mailto: "mailto" });
 read_struct!(Dest { page: "page", x: "x", y: "y", element: "element", struct_path: "struct" });
-read_struct!(Structure { elements: "elements" });
+read_struct!(Structure { elements: "elements", role_map: "roleMap" });
+read_struct!(RoleMapEntry { custom: "type", mapped: "mapped" });
 read_struct!(StructElement { element_type: "type", namespace: "namespace", path: "path", lang: "lang", alt: "alt", expansion: "expansion", id: "id", attributes: "attributes", refs: "refs", children: "children" });
 read_struct!(ContentChild { page: "page", item: "item" });
 read_struct!(LinkChild { link: "link" });
@@ -1698,7 +1740,10 @@ mod tests {
         assert_eq!(read::<Table<Num>>(r#"{"0":1,"12":2}"#).unwrap().keys().copied().collect::<Vec<_>>(), vec![0, 12]);
         assert!(read::<Table<Num>>(r#"{"01":1}"#).is_err() && read::<Table<Num>>(r#"{"-1":1}"#).is_err());
         assert_eq!(read::<CmykInk>(r#"{"cmyk":[0,0,0,1],"cmyk":[0,0,0,1]}"#).unwrap_err(), "duplicate field `cmyk`");
-        assert_eq!(read::<Conformance>(r#""pdfua1""#).unwrap_err(), "unknown variant `pdfua1`");
+        assert_eq!(read::<Conformance>(r#""pdfua3""#).unwrap_err(), "unknown variant `pdfua3`");
+        assert_eq!(read::<Conformance>(r#""pdfua1""#).unwrap(), Conformance::Pdfua1);
+        assert_eq!(read::<PdfVersion>(r#""1.7""#).unwrap(), PdfVersion::V1_7);
+        assert_eq!(read::<PdfVersion>(r#""2.0""#).unwrap_err(), "unknown variant `2.0`");
         assert_eq!(read::<KindText>(r#""shape""#).unwrap_err(), r#"expected "text", found "shape""#);
     }
 }

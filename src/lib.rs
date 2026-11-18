@@ -21,7 +21,7 @@ use std::fmt;
 use pdf_writer::{Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 use sha2::{Digest, Sha256};
 
-use list::{Blobs, Conformance, DisplayList, Num, Utf16};
+use list::{Archival, Blobs, Conformance, DisplayList, Num, Utf16};
 
 /// What the file names as its producer and creator: the printer, as the oracle names it, so the Info dictionary and the packet say what they always said.
 pub const PRODUCER: &str = "BelType Caster";
@@ -109,7 +109,13 @@ pub fn write_trusting(list: &DisplayList, blobs: &Blobs, verified: &dyn Fn(&str)
     let date = pdf_date(&list.info.created)?;
 
     let mut pdf = Pdf::new();
-    pdf.set_version(2, 0);
+    // A 1.7 list asks for the `%PDF-1.7` header and no catalog `/Version` (*the PDF 1.7 family joins the list*, Caster's DESIGN.md S110).
+    let pdf17 = list.info.pdf.is_some();
+    if pdf17 {
+        pdf.set_version(1, 7);
+    } else {
+        pdf.set_version(2, 0);
+    }
     let mut next = Ref::new(1);
     let catalog_id = next.bump();
     let pages_id = next.bump();
@@ -137,7 +143,9 @@ pub fn write_trusting(list: &DisplayList, blobs: &Blobs, verified: &dyn Fn(&str)
     catalog.lang(TextStr(&list.info.lang));
     catalog.viewer_preferences().display_doc_title(true);
     catalog.metadata(xmp_id);
-    catalog.pair(Name(b"Version"), Name(b"2.0"));
+    if !pdf17 {
+        catalog.pair(Name(b"Version"), Name(b"2.0"));
+    }
     catalog.pair(Name(b"StructTreeRoot"), tree.root);
     catalog.mark_info().marked(true);
     if let Some(outlines) = tree.outlines {
@@ -224,8 +232,8 @@ pub fn write_trusting(list: &DisplayList, blobs: &Blobs, verified: &dyn Fn(&str)
         pdf.stream(content_id, &fonts::deflate(&content.bytes)).filter(pdf_writer::Filter::FlateDecode);
     }
 
-    // Under the archival claim the file carries no document information dictionary (PDF/A-4 6.1.3, veraPDF's 6.1.3-4): the title is the XMP's, and the identifier its object would have had stays a free entry.
-    if list.info.archival.is_none() {
+    // Under the PDF/A-4 claim the file carries no document information dictionary (PDF/A-4 6.1.3, veraPDF's 6.1.3-4): the title is the XMP's, and the identifier its object would have had stays a free entry. PDF/A-2 allows one the XMP matches, and the file keeps it (S110).
+    if list.info.archival != Some(Archival::Pdfa4) {
         let mut info = pdf.document_info(info_id);
         text_pair(&mut info, b"Title", &list.info.title);
         info.producer(TextStr(PRODUCER));
@@ -288,7 +296,7 @@ fn escape_xml(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
-/// The XMP packet as Caster's `addXmpMetadata` builds it: dc:title, the producing tool twice, the PDF/UA-2 identification when the file claims it, the language; UTF-8, its title through `TextEncoder`'s rule (a lone surrogate becomes U+FFFD). Past the oracle, Well-Tagged PDF's two PDF Declarations, accessibility and reuse (WTPDF 1.0 §6.1.2 and §6.1.3, in the `pdfd` schema of PDF Declarations §8), are written with the PDF/UA-2 claim and withdrawn with it, as Egildo ruled on 2026-11-02. Each is written in two spellings, four `conformsTo` entries, as Egildo ruled on 2026-11-03: `wtpdf#…`, as veraPDF 1.30's `wt1a` and `wt1r` test them (`declarations.contains(…)`, so the other entries do no harm), and `wtpdf/#…`, as the WTPDF 1.0.0 text (2024-02) prints them. The README records the three spellings found and the evidence. Under a list claiming nothing (`tagged`, Caster's `standard: 'none'` or a guess) none is written. Under the archival claim (`info.archival`, `pdfa4`) the PDF/A-4 identification follows, part 4 and rev 2020 with no conformance level (ISO 19005-4 6.7.3, as veraPDF's rules 6.7.3-1 to -6 read it), whatever the PDF/UA-2 claim.
+/// The XMP packet as Caster's `addXmpMetadata` builds it: dc:title, the producing tool twice, the PDF/UA-2 identification when the file claims it, the language; UTF-8, its title through `TextEncoder`'s rule (a lone surrogate becomes U+FFFD). Past the oracle, Well-Tagged PDF's two PDF Declarations, accessibility and reuse (WTPDF 1.0 §6.1.2 and §6.1.3, in the `pdfd` schema of PDF Declarations §8), are written with the PDF/UA-2 claim and withdrawn with it, as Egildo ruled on 2026-11-02. Each is written in two spellings, four `conformsTo` entries, as Egildo ruled on 2026-11-03: `wtpdf#…`, as veraPDF 1.30's `wt1a` and `wt1r` test them (`declarations.contains(…)`, so the other entries do no harm), and `wtpdf/#…`, as the WTPDF 1.0.0 text (2024-02) prints them. The README records the three spellings found and the evidence. Under a list claiming nothing (`tagged`, Caster's `standard: 'none'` or a guess) none is written. Under the archival claim (`info.archival`, `pdfa4`) the PDF/A-4 identification follows, part 4 and rev 2020 with no conformance level (ISO 19005-4 6.7.3, as veraPDF's rules 6.7.3-1 to -6 read it), whatever the PDF/UA-2 claim. In a 1.7 file (S110) `pdfua1` writes part 1 with no rev and no declaration, a PDF/A-2 claim part 2 with its conformance level, the extension schema of `pdfuaid` where PDF/UA-1 is claimed, and the two dates beside `xmp:CreatorTool`.
 fn xmp(list: &DisplayList) -> String {
     let language = &list.info.lang;
     let title = escape_xml(&list.info.title.lossy());
@@ -298,7 +306,15 @@ fn xmp(list: &DisplayList) -> String {
     } else {
         ""
     };
-    let archival = if list.info.archival.is_some() { "\n    <rdf:Description rdf:about=\"\" xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\">\n      <pdfaid:part>4</pdfaid:part>\n      <pdfaid:rev>2020</pdfaid:rev>\n    </rdf:Description>" } else { "" };
+    let ua1 = if list.info.conformance == Conformance::Pdfua1 { "\n    <rdf:Description rdf:about=\"\" xmlns:pdfuaid=\"http://www.aiim.org/pdfua/ns/id/\">\n      <pdfuaid:part>1</pdfuaid:part>\n    </rdf:Description>" } else { "" };
+    let level = list.info.archival.and_then(Archival::level);
+    let archival = match (list.info.archival, level) {
+        (Some(Archival::Pdfa4), _) => "\n    <rdf:Description rdf:about=\"\" xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\">\n      <pdfaid:part>4</pdfaid:part>\n      <pdfaid:rev>2020</pdfaid:rev>\n    </rdf:Description>".to_string(),
+        (_, Some(level)) => format!("\n    <rdf:Description rdf:about=\"\" xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\">\n      <pdfaid:part>2</pdfaid:part>\n      <pdfaid:conformance>{level}</pdfaid:conformance>\n    </rdf:Description>{}", if list.info.conformance == Conformance::Pdfua1 { PDFUAID_EXTENSION } else { "" }),
+        _ => String::new(),
+    };
+    // PDF/A-2 asks the packet to match the information dictionary's dates (veraPDF's 6.6.3-1): the two, at whole seconds, under a PDF/A-2 claim alone, so no other file moves.
+    let dates = if level.is_some() { let at = format!("{}Z", &list.info.created[..19]); format!("\n    <rdf:Description rdf:about=\"\" xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\">\n      <xmp:CreateDate>{at}</xmp:CreateDate>\n      <xmp:ModifyDate>{at}</xmp:ModifyDate>\n    </rdf:Description>") } else { String::new() };
     format!(
         "<?xpacket begin=\"\u{FEFF}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>
 <x:xmpmeta xmlns:x=\"adobe:ns:meta/\">
@@ -312,15 +328,39 @@ fn xmp(list: &DisplayList) -> String {
     </rdf:Description>
     <rdf:Description rdf:about=\"\" xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\">
       <xmp:CreatorTool>{tool}</xmp:CreatorTool>
-    </rdf:Description>
+    </rdf:Description>{dates}
     <rdf:Description rdf:about=\"\" xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\">
       <pdf:Producer>{tool}</pdf:Producer>
-    </rdf:Description>{ua}{archival}
+    </rdf:Description>{ua}{ua1}{archival}
   </rdf:RDF>
 </x:xmpmeta>
 <?xpacket end=\"w\"?>"
     )
 }
+
+/// The PDF/A extension schema that declares `pdfuaid:part` to a PDF/A-2 reader, which does not predefine the namespace (S110), as Caster's `PDFUAID_EXTENSION` writes it.
+const PDFUAID_EXTENSION: &str = "
+    <rdf:Description rdf:about=\"\" xmlns:pdfaExtension=\"http://www.aiim.org/pdfa/ns/extension/\" xmlns:pdfaSchema=\"http://www.aiim.org/pdfa/ns/schema#\" xmlns:pdfaProperty=\"http://www.aiim.org/pdfa/ns/property#\">
+      <pdfaExtension:schemas>
+        <rdf:Bag>
+          <rdf:li rdf:parseType=\"Resource\">
+            <pdfaSchema:schema>PDF/UA Universal Accessibility Schema</pdfaSchema:schema>
+            <pdfaSchema:namespaceURI>http://www.aiim.org/pdfua/ns/id/</pdfaSchema:namespaceURI>
+            <pdfaSchema:prefix>pdfuaid</pdfaSchema:prefix>
+            <pdfaSchema:property>
+              <rdf:Seq>
+                <rdf:li rdf:parseType=\"Resource\">
+                  <pdfaProperty:name>part</pdfaProperty:name>
+                  <pdfaProperty:valueType>Integer</pdfaProperty:valueType>
+                  <pdfaProperty:category>internal</pdfaProperty:category>
+                  <pdfaProperty:description>Indicates, which part of ISO 14289 standard is followed</pdfaProperty:description>
+                </rdf:li>
+              </rdf:Seq>
+            </pdfaSchema:property>
+          </rdf:li>
+        </rdf:Bag>
+      </pdfaExtension:schemas>
+    </rdf:Description>";
 
 /// The blobs a list names, read from a folder of files named by their SHA-256: each name the list gives that is a SHA-256 in lowercase hex and names a file there. A name that is not, or names no file, is left out, and the validator refuses the list for it in its own sentence.
 ///
