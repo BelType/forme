@@ -3,7 +3,7 @@
 //! - **The tree is the list's**: elements allocated in the array's order before any dictionary is written, each from its fields (in a PDF 1.7 file with no namespace object, no `/NS` and the list's `/RoleMap`), `/K` from `children` in order, `/P` from the element that lists it, the PDF 2.0 namespace on every element but one whose `namespace` names the PDF 1.7 one, whose object is written only in a file that uses it, and `/Ref` only on an element that refers to some. An element whose content is all on one page carries `/Pg` and bare MCIDs; content on two pages is named per item by `/MCR`. Attribute objects are written `/O` first and then in the schema's key order, every string a name but each `Headers` entry, a byte string; one object is `/A` itself, more are an array.
 //! - **The ParentTree** is one flat number tree: one array per page indexed by MCID, keyed by the page's index (its `/StructParents`), then one entry per link, keyed by the page count plus the link's `order` (its `/StructParent`). The IDTree is one flat name tree, sorted by UTF-16 code unit, and two elements with one `/ID` are refused.
 //! - **A link** is an annotation with `/Rect` the union of its `/QuadPoints`, `/F 4`, `/Border [0 0 0]`, `/Contents`, `/StructParent` and `/P`, and either a `/URI` action or a structure destination `[element /XYZ x y null]`, and an `/OBJR` in its element's `/K`.
-//! - **The outline** nests by level, every item open, each destination `[element /XYZ null top null]`, and in a PDF 1.7 file, which has no structure destinations, `[page /XYZ null top null]`, as a link's is (Caster's DESIGN.md S110); `/PageLabels` opens with an empty dictionary when the first run is not on the first page.
+//! - **The outline** nests by level, every item open, each destination `[element /XYZ null top null]`, and in a PDF 1.7 file, which has no structure destinations, `[page /XYZ null top null]`, as a link's is (Caster's DESIGN.md S111); `/PageLabels` opens with an empty dictionary when the first run is not on the first page.
 
 use pdf_writer::{Finish, Name, Obj, Pdf, Ref, Str, TextStr};
 
@@ -48,7 +48,7 @@ pub fn write(pdf: &mut Pdf, next: &mut Ref, list: &DisplayList, pages: &[Ref], m
     let mut links: Vec<(&LinkItem, usize)> = list.pages.iter().enumerate().flat_map(|(p, page)| page.items.iter().filter_map(move |item| if let Item::Link(link) = item { Some((link, p)) } else { None })).collect();
     links.sort_by(|a, b| a.0.order.0.total_cmp(&b.0.order.0));
 
-    // A PDF 1.7 file has no namespaces, and names a page, not an element, in every destination (*a PDF 1.7 file reads the tag table backwards*, Caster's DESIGN.md S110).
+    // A PDF 1.7 file has no namespaces, and names a page, not an element, in every destination (*a PDF 1.7 file reads the tag table backwards*, Caster's DESIGN.md S111).
     let pdf17 = list.info.pdf.is_some();
     let namespace = (!pdf17).then(|| next.bump());
     if let Some(namespace) = namespace {

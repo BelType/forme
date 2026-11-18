@@ -33,7 +33,7 @@ pub fn validate(list: &DisplayList, blobs: &Blobs) -> Result<(), Refusal> {
     check_tree(list)
 }
 
-/// The claims fit the file's version, and a PDF 1.7 list holds nothing a 1.7 file cannot say (*the PDF 1.7 family joins the list* and *a PDF 1.7 file reads the tag table backwards*, Caster's DESIGN.md S110): `pdfua2` and `pdfa4` are PDF 2.0 claims, `pdfua1` and the PDF/A-2 levels PDF 1.7 ones; a 1.7 list names no namespace and no `refs`, and only a 1.7 list carries a role map.
+/// The claims fit the file's version, and a PDF 1.7 list holds nothing a 1.7 file cannot say (*the PDF 1.7 family joins the list* and *a PDF 1.7 file reads the tag table backwards*, Caster's DESIGN.md S111): `pdfua2` and `pdfa4` are PDF 2.0 claims, `pdfua1` and the PDF/A-2 levels PDF 1.7 ones; a 1.7 list names no namespace and no `refs`, and only a 1.7 list carries a role map.
 fn check_version(list: &DisplayList) -> Result<(), Refusal> {
     let older = list.info.pdf.is_some();
     let version = |is_older: bool| if is_older { "1.7" } else { "2.0" };
@@ -156,7 +156,7 @@ fn check_archival(list: &DisplayList, blobs: &Blobs) -> Result<(), Refusal> {
     let Some(archival) = list.info.archival else {
         return Ok(());
     };
-    // A PDF/A-2 claim is held to the same rules, in PDF/A-2's words (S110).
+    // A PDF/A-2 claim is held to the same rules, in PDF/A-2's words (S111).
     let (claim, iso, member) = if archival == Archival::Pdfa4 { ("PDF/A-4", "ISO 19005-4", "`a-4`") } else { ("PDF/A-2", "ISO 19005-2", "the PDF/A-2 member") };
     let Some(story) = &list.writing.colour else {
         return Err(Refusal::new(format!("caster: the display list claims {claim} and carries no colour story, so no output intent would say what its colours mean ({iso}, 6.2.4.3)")));
@@ -247,7 +247,7 @@ fn check_gaps(list: &DisplayList) -> Result<(), Refusal> {
     if list.info.conformance == Conformance::Tagged {
         return Ok(());
     }
-    // PDF/UA-1 forbids `.notdef` too (ISO 14289-1, 7.21.8; S110).
+    // PDF/UA-1 forbids `.notdef` too (ISO 14289-1, 7.21.8; S111).
     let ua1 = list.info.conformance == Conformance::Pdfua1;
     for (p, page) in list.pages.iter().enumerate() {
         for (at, item) in page.items.iter().enumerate() {

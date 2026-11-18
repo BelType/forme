@@ -109,7 +109,7 @@ pub fn write_trusting(list: &DisplayList, blobs: &Blobs, verified: &dyn Fn(&str)
     let date = pdf_date(&list.info.created)?;
 
     let mut pdf = Pdf::new();
-    // A 1.7 list asks for the `%PDF-1.7` header and no catalog `/Version` (*the PDF 1.7 family joins the list*, Caster's DESIGN.md S110).
+    // A 1.7 list asks for the `%PDF-1.7` header and no catalog `/Version` (*the PDF 1.7 family joins the list*, Caster's DESIGN.md S111).
     let pdf17 = list.info.pdf.is_some();
     if pdf17 {
         pdf.set_version(1, 7);
@@ -232,7 +232,7 @@ pub fn write_trusting(list: &DisplayList, blobs: &Blobs, verified: &dyn Fn(&str)
         pdf.stream(content_id, &fonts::deflate(&content.bytes)).filter(pdf_writer::Filter::FlateDecode);
     }
 
-    // Under the PDF/A-4 claim the file carries no document information dictionary (PDF/A-4 6.1.3, veraPDF's 6.1.3-4): the title is the XMP's, and the identifier its object would have had stays a free entry. PDF/A-2 allows one the XMP matches, and the file keeps it (S110).
+    // Under the PDF/A-4 claim the file carries no document information dictionary (PDF/A-4 6.1.3, veraPDF's 6.1.3-4): the title is the XMP's, and the identifier its object would have had stays a free entry. PDF/A-2 allows one the XMP matches, and the file keeps it (S111).
     if list.info.archival != Some(Archival::Pdfa4) {
         let mut info = pdf.document_info(info_id);
         text_pair(&mut info, b"Title", &list.info.title);
@@ -296,7 +296,7 @@ fn escape_xml(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
-/// The XMP packet as Caster's `addXmpMetadata` builds it: dc:title, the producing tool twice, the PDF/UA-2 identification when the file claims it, the language; UTF-8, its title through `TextEncoder`'s rule (a lone surrogate becomes U+FFFD). Past the oracle, Well-Tagged PDF's two PDF Declarations, accessibility and reuse (WTPDF 1.0 §6.1.2 and §6.1.3, in the `pdfd` schema of PDF Declarations §8), are written with the PDF/UA-2 claim and withdrawn with it, as Egildo ruled on 2026-11-02. Each is written in two spellings, four `conformsTo` entries, as Egildo ruled on 2026-11-03: `wtpdf#…`, as veraPDF 1.30's `wt1a` and `wt1r` test them (`declarations.contains(…)`, so the other entries do no harm), and `wtpdf/#…`, as the WTPDF 1.0.0 text (2024-02) prints them. The README records the three spellings found and the evidence. Under a list claiming nothing (`tagged`, Caster's `standard: 'none'` or a guess) none is written. Under the archival claim (`info.archival`, `pdfa4`) the PDF/A-4 identification follows, part 4 and rev 2020 with no conformance level (ISO 19005-4 6.7.3, as veraPDF's rules 6.7.3-1 to -6 read it), whatever the PDF/UA-2 claim. In a 1.7 file (S110) `pdfua1` writes part 1 with no rev and no declaration, a PDF/A-2 claim part 2 with its conformance level, the extension schema of `pdfuaid` where PDF/UA-1 is claimed, and the two dates beside `xmp:CreatorTool`.
+/// The XMP packet as Caster's `addXmpMetadata` builds it: dc:title, the producing tool twice, the PDF/UA-2 identification when the file claims it, the language; UTF-8, its title through `TextEncoder`'s rule (a lone surrogate becomes U+FFFD). Past the oracle, Well-Tagged PDF's two PDF Declarations, accessibility and reuse (WTPDF 1.0 §6.1.2 and §6.1.3, in the `pdfd` schema of PDF Declarations §8), are written with the PDF/UA-2 claim and withdrawn with it, as Egildo ruled on 2026-11-02. Each is written in two spellings, four `conformsTo` entries, as Egildo ruled on 2026-11-03: `wtpdf#…`, as veraPDF 1.30's `wt1a` and `wt1r` test them (`declarations.contains(…)`, so the other entries do no harm), and `wtpdf/#…`, as the WTPDF 1.0.0 text (2024-02) prints them. The README records the three spellings found and the evidence. Under a list claiming nothing (`tagged`, Caster's `standard: 'none'` or a guess) none is written. Under the archival claim (`info.archival`, `pdfa4`) the PDF/A-4 identification follows, part 4 and rev 2020 with no conformance level (ISO 19005-4 6.7.3, as veraPDF's rules 6.7.3-1 to -6 read it), whatever the PDF/UA-2 claim. In a 1.7 file (S111) `pdfua1` writes part 1 with no rev and no declaration, a PDF/A-2 claim part 2 with its conformance level, the extension schema of `pdfuaid` where PDF/UA-1 is claimed, and the two dates beside `xmp:CreatorTool`.
 fn xmp(list: &DisplayList) -> String {
     let language = &list.info.lang;
     let title = escape_xml(&list.info.title.lossy());
@@ -338,7 +338,7 @@ fn xmp(list: &DisplayList) -> String {
     )
 }
 
-/// The PDF/A extension schema that declares `pdfuaid:part` to a PDF/A-2 reader, which does not predefine the namespace (S110), as Caster's `PDFUAID_EXTENSION` writes it.
+/// The PDF/A extension schema that declares `pdfuaid:part` to a PDF/A-2 reader, which does not predefine the namespace (S111), as Caster's `PDFUAID_EXTENSION` writes it.
 const PDFUAID_EXTENSION: &str = "
     <rdf:Description rdf:about=\"\" xmlns:pdfaExtension=\"http://www.aiim.org/pdfa/ns/extension/\" xmlns:pdfaSchema=\"http://www.aiim.org/pdfa/ns/schema#\" xmlns:pdfaProperty=\"http://www.aiim.org/pdfa/ns/property#\">
       <pdfaExtension:schemas>

@@ -137,7 +137,7 @@ pub struct Vectors<'a> {
     shared: Vec<(String, String, Ref)>,
     /// Whether the document has a colour story, whose sRGB profile a blend's group names as its blending space.
     has_colour: bool,
-    /// Whether the list claims PDF/A-2, under which every RGB shading names the sRGB profile and every form its own `/DefaultRGB` (Caster's DESIGN.md S110).
+    /// Whether the list claims PDF/A-2, under which every RGB shading names the sRGB profile and every form its own `/DefaultRGB` (Caster's DESIGN.md S111).
     pdfa2: bool,
     /// The sRGB profile's stream, allocated when a group or a page first names it and written by the colour story's `finish` (Egildo's ruling 15a).
     pub srgb: Option<Ref>,
@@ -525,7 +525,7 @@ impl<'a> Vectors<'a> {
 
     /// A form XObject: its content deflated, its `/BBox` at four decimals, a transparency group when `group`, and its own `/Resources`.
     fn form_stream(&mut self, bbox: &BoxPt, content: Content, scope: &Scope, group: bool, space: Option<Ref>) -> Ref {
-        // Under a PDF/A-2 claim every form names its own `/DefaultRGB`: veraPDF's PDF/A-2 profile reads a form's `/DeviceRGB` against the form's own resources, where PDF/A-4's reads the page's (ISO 19005-2, 6.2.4.3; Caster's DESIGN.md S110).
+        // Under a PDF/A-2 claim every form names its own `/DefaultRGB`: veraPDF's PDF/A-2 profile reads a form's `/DeviceRGB` against the form's own resources, where PDF/A-4's reads the page's (ISO 19005-2, 6.2.4.3; Caster's DESIGN.md S111).
         let default_rgb = if self.pdfa2 { self.blending_space() } else { None };
         let id = self.next.bump();
         let bytes = crate::fonts::deflate(&content.finish());
@@ -622,7 +622,7 @@ impl<'a> Vectors<'a> {
         f.insert(Name(b"Bounds")).array().items(f32s(bounds));
         f.insert(Name(b"Encode")).array().items(segments.iter().flat_map(|_| [0, 1]));
         f.finish();
-        // Under a PDF/A-2 claim an RGB shading names the sRGB profile: veraPDF's PDF/A-2 profile reads a shading pattern's `/DeviceRGB` with no default colour space of its own (S110).
+        // Under a PDF/A-2 claim an RGB shading names the sRGB profile: veraPDF's PDF/A-2 profile reads a shading pattern's `/DeviceRGB` with no default colour space of its own (S111).
         let icc = if self.pdfa2 && space == "DeviceRGB" { self.blending_space() } else { None };
         let id = self.next.bump();
         let mut d = self.pdf.indirect(id).dict();

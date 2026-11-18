@@ -228,12 +228,12 @@ pub struct DocumentInfo {
     /// The catalog `/Lang`.
     pub lang: String,
     pub title: Utf16,
-    /// The file's version where it is not PDF 2.0: `1.7` under a member of Caster's PDF 1.7 family (*the PDF 1.7 family joins the list*, Caster's DESIGN.md S110). Absent, the file is PDF 2.0. Version 7, optional.
+    /// The file's version where it is not PDF 2.0: `1.7` under a member of Caster's PDF 1.7 family (*the PDF 1.7 family joins the list*, Caster's DESIGN.md S111). Absent, the file is PDF 2.0. Version 8, optional.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub pdf: Option<PdfVersion>,
-    /// `tagged` once a guess in the tree withdrew the claim (*the printer guesses, says so, and withdraws the claim*, S90); `pdfua1`, in a 1.7 list alone, claims PDF/UA-1 (S110).
+    /// `tagged` once a guess in the tree withdrew the claim (*the printer guesses, says so, and withdraws the claim*, S90); `pdfua1`, in a 1.7 list alone, claims PDF/UA-1 (S111).
     pub conformance: Conformance,
-    /// The archival claim, `pdfa4` under Caster's `standard` with `a-4` (*an archival claim is kept or refused*): the file then carries the PDF/A-4 identification, no document information dictionary, and the archive's output intent beside the print shop's. `pdfa2b`, `pdfa2u` and `pdfa2a`, in a 1.7 list alone, claim PDF/A-2 at its level: its identification and conformance, the dates beside the information dictionary the file keeps, and the archive's output intent (S110). Absent, the file makes none. Version 7, optional.
+    /// The archival claim, `pdfa4` under Caster's `standard` with `a-4` (*an archival claim is kept or refused*): the file then carries the PDF/A-4 identification, no document information dictionary, and the archive's output intent beside the print shop's. `pdfa2b`, `pdfa2u` and `pdfa2a`, in a 1.7 list alone, claim PDF/A-2 at its level: its identification and conformance, the dates beside the information dictionary the file keeps, and the archive's output intent (S111). Absent, the file makes none. Version 8, optional.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub archival: Option<Archival>,
     pub page_count: Num,
@@ -1347,7 +1347,7 @@ pub struct Dest {
 pub struct Structure {
     /// The order is data: the order the writer allocates the elements' objects in, which every index into the array names.
     pub elements: Vec<StructElement>,
-    /// The `/RoleMap` of a PDF 1.7 file: each custom type its elements use, mapped to the PDF 1.7 type nearest it, in the order written (*a PDF 1.7 file reads the tag table backwards*, S110). Absent in a PDF 2.0 file. Version 7, optional.
+    /// The `/RoleMap` of a PDF 1.7 file: each custom type its elements use, mapped to the PDF 1.7 type nearest it, in the order written (*a PDF 1.7 file reads the tag table backwards*, S111). Absent in a PDF 2.0 file. Version 8, optional.
     #[cfg_attr(feature = "serde", serde(rename = "roleMap", skip_serializing_if = "Option::is_none"))]
     pub role_map: Option<Vec<RoleMapEntry>>,
 }
