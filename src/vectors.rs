@@ -137,6 +137,8 @@ pub struct Vectors<'a> {
     shared: Vec<(String, String, Ref)>,
     /// Whether the document has a colour story, whose sRGB profile a blend's group names as its blending space.
     has_colour: bool,
+    /// Whether the list claims PDF/A-2, under which every RGB shading names the sRGB profile and every form its own `/DefaultRGB` (Caster's DESIGN.md S110).
+    pdfa2: bool,
     /// The sRGB profile's stream, allocated when a group or a page first names it and written by the colour story's `finish` (Egildo's ruling 15a).
     pub srgb: Option<Ref>,
     /// One row per node painted, in painting order, each a JSON object: Caster's `ReportPaint`.
@@ -226,7 +228,8 @@ fn join(xs: impl IntoIterator<Item = f64>, sep: &str) -> String {
 impl<'a> Vectors<'a> {
     pub fn new(pdf: &'a mut Pdf, next: &'a mut Ref, list: &'a DisplayList, images: &'a Images) -> Self {
         let has_colour = list.writing.colour.is_some();
-        Self { pdf, next, list, images, shadings: Vec::new(), patterns: Vec::new(), states: Vec::new(), forms: 0, shared: Vec::new(), has_colour, srgb: None, paint: Vec::new() }
+        let pdfa2 = has_colour && list.info.archival.and_then(crate::list::Archival::level).is_some();
+        Self { pdf, next, list, images, shadings: Vec::new(), patterns: Vec::new(), states: Vec::new(), forms: 0, shared: Vec::new(), has_colour, pdfa2, srgb: None, paint: Vec::new() }
     }
 
     /// The document's sRGB profile as the blending space of every transparency group and of a page that holds a blend, allocated on first use; nothing with no colour story, where `/DeviceRGB` stands.
@@ -522,6 +525,8 @@ impl<'a> Vectors<'a> {
 
     /// A form XObject: its content deflated, its `/BBox` at four decimals, a transparency group when `group`, and its own `/Resources`.
     fn form_stream(&mut self, bbox: &BoxPt, content: Content, scope: &Scope, group: bool, space: Option<Ref>) -> Ref {
+        // Under a PDF/A-2 claim every form names its own `/DefaultRGB`: veraPDF's PDF/A-2 profile reads a form's `/DeviceRGB` against the form's own resources, where PDF/A-4's reads the page's (ISO 19005-2, 6.2.4.3; Caster's DESIGN.md S110).
+        let default_rgb = if self.pdfa2 { self.blending_space() } else { None };
         let id = self.next.bump();
         let bytes = crate::fonts::deflate(&content.finish());
         let mut s = self.pdf.stream(id, &bytes);
@@ -542,6 +547,9 @@ impl<'a> Vectors<'a> {
             g.finish();
         }
         let mut resources = s.insert(Name(b"Resources")).dict();
+        if let Some(srgb) = default_rgb {
+            resources.insert(Name(b"ColorSpace")).dict().insert(Name(b"DefaultRGB")).array().item(Name(b"ICCBased")).item(srgb);
+        }
         for (key, map) in [(&b"Shading"[..], &scope.shadings), (b"Pattern", &scope.patterns), (b"ExtGState", &scope.ext_g_states), (b"XObject", &scope.xobjects)] {
             if !map.is_empty() {
                 let mut d = resources.insert(Name(key)).dict();
@@ -614,9 +622,19 @@ impl<'a> Vectors<'a> {
         f.insert(Name(b"Bounds")).array().items(f32s(bounds));
         f.insert(Name(b"Encode")).array().items(segments.iter().flat_map(|_| [0, 1]));
         f.finish();
+        // Under a PDF/A-2 claim an RGB shading names the sRGB profile: veraPDF's PDF/A-2 profile reads a shading pattern's `/DeviceRGB` with no default colour space of its own (S110).
+        let icc = if self.pdfa2 && space == "DeviceRGB" { self.blending_space() } else { None };
         let id = self.next.bump();
         let mut d = self.pdf.indirect(id).dict();
-        d.pair(Name(b"ShadingType"), shading_type(g)).pair(Name(b"ColorSpace"), Name(space.as_bytes()));
+        d.pair(Name(b"ShadingType"), shading_type(g));
+        match icc {
+            Some(srgb) => {
+                d.insert(Name(b"ColorSpace")).array().item(Name(b"ICCBased")).item(srgb);
+            }
+            None => {
+                d.pair(Name(b"ColorSpace"), Name(space.as_bytes()));
+            }
+        }
         d.insert(Name(b"Coords")).array().items(f32s(g.coords.iter().map(|c| round4(c.0))));
         // A shading maps the start of its axis to the first value of its `/Domain` (ISO 32000-2, 8.7.4.5.3), so the domain is the line's own parameter and a stop at 40% stays at 40% of the line; the stops' range drew it at the start.
         let domain = [0.0, 1.0];
