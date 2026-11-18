@@ -678,7 +678,7 @@ fn shown(bytes: Vec<u8>) -> usize {
 fn a_gap_with_no_space_glyph_is_refused_under_the_claim_and_positioning_without_it() {
     let (list, blobs) = spaceless("pdfua2");
     let refusal = write(&list, &blobs).map(|_| ()).unwrap_err();
-    assert!(refusal.message.starts_with("caster: the face ") && refusal.message.contains(") has no space glyph, so the word gap in text item ") && refusal.message.ends_with("or print with `standard: 'none'`, which claims no standard and writes the gap as positioning with no glyph"), "{}", refusal.message);
+    assert!(refusal.message.starts_with("caster: the face ") && refusal.message.contains(") has no space glyph, so the word gap in text item ") && refusal.message.ends_with("or print with `standard: 'none'`, or `'a-4'` alone, which do not claim PDF/UA-2 and write the gap as positioning with no glyph"), "{}", refusal.message);
     assert_eq!(refusal.list_item.map(|at| at[0]), Some(0.0));
 
     let (claimed, blobs) = list_of("photo");

@@ -227,7 +227,7 @@ fn check_gaps(list: &DisplayList) -> Result<(), Refusal> {
                 continue;
             }
             let family = list.resources.fonts.iter().find(|instance| instance.key == text.font).map(|instance| instance.family.as_str()).filter(|family| !family.is_empty()).unwrap_or(&text.font);
-            return Err(Refusal::at(format!("caster: the face {family} ({}) has no space glyph, so the word gap in text item {at} of page {} would be glyph 0, .notdef, which PDF/UA-2 forbids a file to show (ISO 14289-2, 8.4.5.9); give the text a face with a space, or print with `standard: 'none'`, which claims no standard and writes the gap as positioning with no glyph", text.font, p + 1), p, at));
+            return Err(Refusal::at(format!("caster: the face {family} ({}) has no space glyph, so the word gap in text item {at} of page {} would be glyph 0, .notdef, which PDF/UA-2 forbids a file to show (ISO 14289-2, 8.4.5.9); give the text a face with a space, or print with `standard: 'none'`, or `'a-4'` alone, which do not claim PDF/UA-2 and write the gap as positioning with no glyph", text.font, p + 1), p, at));
         }
     }
     Ok(())
