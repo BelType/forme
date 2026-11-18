@@ -1,6 +1,6 @@
-//! The display list, version 7: a Caster document as plain data, in the order the writer paints it, written by hand from Caster's `src/displayList.ts`, whose TSDoc each member's doc comment carries. This module is the schema's authority on the Rust side; Caster's `displayList.ts` and `displayList/contract.ts` are the authority it follows.
+//! The display list, version 8: a Caster document as plain data, in the order the writer paints it, written by hand from Caster's `src/displayList.ts`, whose TSDoc each member's doc comment carries. This module is the schema's authority on the Rust side; Caster's `displayList.ts` and `displayList/contract.ts` are the authority it follows.
 //!
-//! Every struct is read by hand ([`crate::read`]) and refuses a field it does not name, so a field added on the JavaScript side is a parse failure here and never a silent omission, and `version` is read before anything else and refused unless it is 7 ([`parse`]). The list arrives as the JSON `JSON.stringify` makes of it with `resources.blobs` removed, which is the fixture format's list file; the blobs arrive beside it, keyed by their names ([`Blobs`]). JSON hides seven sharp edges, and each binds here:
+//! Every struct is read by hand ([`crate::read`]) and refuses a field it does not name, so a field added on the JavaScript side is a parse failure here and never a silent omission, and `version` is read before anything else and refused unless it is 8 ([`parse`]). The list arrives as the JSON `JSON.stringify` makes of it with `resources.blobs` removed, which is the fixture format's list file; the blobs arrive beside it, keyed by their names ([`Blobs`]). JSON hides seven sharp edges, and each binds here:
 //!
 //! - **Offsets are UTF-16 code units.** `text`, `segments.start` and `glyphs.clusters` count UTF-16 code units, so a text the writer writes is a [`Utf16`], the one string type that takes the lone surrogate `JSON.stringify` writes as `\udXXX` and a DOM text can hold ([`crate::read`]).
 //! - **Numbers are doubles, parsed exactly.** Rust's correctly rounded `f64::from_str` on each literal, as serde_json with `float_roundtrip` read it ([`crate::read`]), so every number is the double JavaScript parsed, and every number of the list is a [`Num`], which writes an integral value back as JSON writes it, `-0` as `0`.
@@ -195,7 +195,7 @@ impl DisplayList {
 }
 
 /// The version this module reads.
-pub const LIST_VERSION: f64 = 7.0;
+pub const LIST_VERSION: f64 = 8.0;
 
 /// Read a list from its JSON: the version first, with the validator's sentence, then the whole schema.
 ///
@@ -217,7 +217,7 @@ pub fn parse(json: &str) -> Result<DisplayList, Refusal> {
         };
         return Err(Refusal::new(format!("caster: the writer reads a display list of version {}, and this one is version {shown}; a list is written again by print(), never upgraded", crate::content::js_string(LIST_VERSION))));
     }
-    DisplayList::read(&value).map_err(|e| Refusal::new(format!("forme: the display list is not the schema of version 7: at {e}")))
+    DisplayList::read(&value).map_err(|e| Refusal::new(format!("forme: the display list is not the schema of version 8: at {e}")))
 }
 
 /// What the file says of itself.
@@ -898,6 +898,9 @@ pub struct Fill {
     pub ink: Option<Ink>,
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub overprint: Option<Overprint>,
+    /// The paint's alpha, from 0 up to but not including 1; absent when the paint is opaque. 0 writes a run invisible (`3 Tr`) and a rectangle not at all; between 0 and 1 the paint is set under an `/ExtGState` with `/ca` (*transparent text is invisible text*, Caster's DESIGN.md S110). The ink, when there is one, is painted at the same alpha. Version 8.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub alpha: Option<Num>,
 }
 
 /// A declared ink: process CMYK, or a spot colourant with its alternate and tint. The names `All` and `None` are the two colourants PDF predefines.
@@ -1608,7 +1611,7 @@ read_struct!(RasterFallbackItem { kind: "kind", owner: "owner", table: "table", 
 read_struct!(TextItem { kind: "kind", owner: "owner", line_index: "lineIndex", font: "font", size: "size", letter_spacing: "letterSpacing", fill: "fill", baseline: "baseline", transform: "transform", clips: "clips", text: "text", leading_space: "leadingSpace", space: "space", glyphs: "glyphs", segments: "segments" });
 read_struct!(TextGlyphs { ids: "ids", advances: "advances", clusters: "clusters" });
 read_struct!(TextSegments { first_glyph: "firstGlyph", start: "start", x: "x", space_before: "spaceBefore" });
-read_struct!(Fill { rgb: "rgb", ink: "ink", overprint: "overprint" });
+read_struct!(Fill { rgb: "rgb", ink: "ink", overprint: "overprint", alpha: "alpha" });
 read_struct!(CmykInk { cmyk: "cmyk" });
 read_struct!(SpotInk { spot: "spot", alternate: "alternate", tint: "tint" });
 read_enum!(Overprint { Fill: "fill", Stroke: "stroke", Both: "both" });

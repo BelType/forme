@@ -434,6 +434,13 @@ impl<'a> Vectors<'a> {
         c.op(&[Operand::Name(&name)], "gs");
     }
 
+    /// A paint's constant fill alpha (*transparent text is invisible text*, Caster's DESIGN.md S110): the shared `/ExtGState` for that `/ca`, named in the page's scope, and its name; a text run's or a rectangle's, which the oracle asks of the same builder as the vector items, so its `GT<n>` and the counts are the oracle's.
+    pub fn alpha_state(&mut self, ca: f64, scope: &mut Scope) -> String {
+        let (name, id, _) = self.state(Some(ca), None, None, None);
+        put(&mut scope.ext_g_states, &name, id);
+        name
+    }
+
     /// One `/ExtGState`, shared by value: its name, its object and the record's params.
     fn state(&mut self, ca: Option<f64>, stroke_ca: Option<f64>, blend: Option<&str>, mask: Option<Mask>) -> (String, Ref, String) {
         let opt = |v: Option<f64>| v.map_or(String::new(), |v| js_string(round4(v)));

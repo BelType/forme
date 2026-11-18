@@ -96,7 +96,7 @@ fn the_validator_refuses_the_twenty_one_broken_lists_with_the_oracles_sentences(
         }};
     }
 
-    refused("cast", &|l| l.version = list::Num(4.0), "caster: the writer reads a display list of version 7, and this one is version 4; a list is written again by print(), never upgraded", None);
+    refused("cast", &|l| l.version = list::Num(4.0), "caster: the writer reads a display list of version 8, and this one is version 4; a list is written again by print(), never upgraded", None);
     refused("cast", &|l| l.resources.fonts[0].blob = "0".repeat(64), "caster: the font instance Source Sans 3#1|wght=700 names the blob 0000000000000000000000000000000000000000000000000000000000000000, and the display list holds no bytes under that key", None);
     refused("cast", &|l| l.resources.images.values_mut().next().unwrap().jpeg = Some("f".repeat(64)), "caster: image 0's photo JPEG names the blob ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff, and the display list holds no bytes under that key", None);
     refused("cast", &|l| { let copy = l.resources.fonts[0].clone(); l.resources.fonts.push(copy); }, "caster: the display list holds two font instances under the key Source Sans 3#1|wght=700", None);
@@ -590,7 +590,7 @@ fn every_list_cut_short_or_with_a_field_renamed_is_refused() {
             let mut renamed = value.clone();
             rename(&mut renamed, &path);
             let error = list::parse(&serde_json::to_string(&renamed).unwrap()).map(|_| ()).unwrap_err().message;
-            assert!(error.starts_with("forme: the display list is not the schema of version 7: at ") || (path == ["version"] && error.contains("this one is version undefined")), "{name}: {} renamed: {error}", path.join("/"));
+            assert!(error.starts_with("forme: the display list is not the schema of version 8: at ") || (path == ["version"] && error.contains("this one is version undefined")), "{name}: {} renamed: {error}", path.join("/"));
             refused += 1;
         }
     }
@@ -736,4 +736,53 @@ fn the_archival_claim_is_written_or_refused() {
     let refusal = write(&rgb, &blobs).map(|_| ()).unwrap_err();
     assert!(refusal.message.contains(" is painted in CMYK") && refusal.message.ends_with("and no CMYK profile stands behind it: the output intent is an RGB profile, so the file could not say what the ink means, which PDF/A-4 asks of every colour (ISO 19005-4, 6.2.4.3); pass a CMYK profile as the `profile` option, or print without `a-4` in `standard`"), "{}", refusal.message);
     assert!(refusal.list_item.is_some(), "the refusal names the item");
+}
+
+/// *Transparent text is invisible text* (Caster's DESIGN.md S110): a run at alpha 0 is written in text render mode 3 with every glyph it shows, a run at 0.5 under the shared `/ca 0.5` state and put back under `/ca 1`, the run after both is opaque and visible, a rectangle at 0.25 sets its state inside its own `q … Q`, and an alpha of 1 is refused in the oracle's sentence.
+#[test]
+fn a_run_at_alpha_0_is_invisible_text_and_one_below_1_is_painted_under_ca() {
+    let alpha = |v: &mut Value| {
+        let items = v["pages"][0]["items"].as_array_mut().unwrap();
+        let texts: Vec<usize> = items.iter().enumerate().filter(|(_, i)| i["kind"] == "text").map(|(at, _)| at).collect();
+        items[texts[0]]["fill"]["alpha"] = serde_json::json!(0);
+        items[texts[1]]["fill"]["alpha"] = serde_json::json!(0.5);
+        let owner = items[texts[0]]["owner"].clone();
+        items.insert(texts[2], serde_json::json!({ "kind": "shape", "owner": owner, "rect": [34, 262, 120, 1.5], "fill": { "rgb": [0.8, 0, 0.2], "alpha": 0.25 } }));
+        for element in v["structure"]["elements"].as_array_mut().unwrap() {
+            for child in element["children"].as_array_mut().unwrap() {
+                if let Some(item) = child.get("item").and_then(Value::as_u64).filter(|&i| i >= texts[2] as u64) {
+                    child["item"] = serde_json::json!(item + 1);
+                }
+            }
+        }
+    };
+    let (plain, blobs) = list_of("photo");
+    let opaque = write(&plain, &blobs).unwrap().bytes;
+    let (list, blobs) = edited("photo", alpha);
+    let bytes = write(&list, &blobs).unwrap().bytes;
+    assert_eq!(shown(bytes.clone()), shown(opaque), "the invisible run shows every glyph it showed");
+    let pdf = hayro_syntax::Pdf::new(bytes.clone()).unwrap();
+    let content = String::from_utf8_lossy(pdf.pages()[0].page_stream().unwrap()).into_owned();
+    let ops: Vec<&str> = content.lines().collect();
+    let at = |line: &str| ops.iter().position(|l| *l == line).unwrap_or_else(|| panic!("no {line:?} in the content"));
+    let tj_after = |from: usize| from + ops[from..].iter().position(|l| l.ends_with("TJ")).unwrap();
+    let (three, zero) = (at("3 Tr"), at("0 Tr"));
+    assert!(three < tj_after(three) && tj_after(three) < zero, "3 Tr before the invisible run's TJ, 0 Tr after it");
+    assert_eq!(ops.iter().filter(|l| l.ends_with(" Tr")).count(), 2, "one 3 Tr and one 0 Tr, and no run after inherits the mode");
+    let (set, reset) = (at("/GT0 gs"), at("/GT1 gs"));
+    assert!(zero < set && set < tj_after(set) && tj_after(set) < reset, "the translucent run's state is set before its TJ and put back after it");
+    let rect = at("/GT2 gs");
+    assert_eq!(&ops[rect - 1..rect + 5], ["q", "/GT2 gs", "0.8 0 0.2 rg", "34 262 120 1.5 re", "f", "Q"], "the rectangle's state inside its own q … Q");
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    for ca in ["/ca 0.5", "/ca 1", "/ca 0.25"] {
+        assert!(text.contains(&format!("{ca}\n")), "an /ExtGState with {ca}");
+    }
+
+    let (bad, blobs) = edited("photo", |v| {
+        let items = v["pages"][0]["items"].as_array_mut().unwrap();
+        let first = items.iter().position(|i| i["kind"] == "text").unwrap();
+        items[first]["fill"]["alpha"] = serde_json::json!(1);
+    });
+    let first = bad.pages[0].items.iter().position(|i| matches!(i, Item::Text(_))).unwrap();
+    assert_eq!(validate(&bad, &blobs), Err(Refusal { message: format!("caster: the fill at item {first} of page 1 has alpha 1; an alpha is a number from 0 up to but not including 1, and absent where the paint is opaque"), list_item: Some([0.0, first as f64]) }));
 }

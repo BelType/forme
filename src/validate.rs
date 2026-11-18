@@ -1,12 +1,12 @@
 //! The refusals of a list the writer could not write, each a sentence, before a byte is written: Caster's `validateList` (`src/displayList/validate.ts`), ported check for check, in its order, with its sentences.
 //!
-//! What it holds: the version (read first, by [`crate::list::parse`]); every blob key a resource names; each image's samples in a shape the schema names, as many bytes as it says (version 6; `DeviceCMYK` at four components and with neither palette nor profile, version 7); the font instances (unique keys, sorted widths, a width for every glyph a text item shows and every space glyph it names); under a PDF/UA-2 claim, no word gap of a face with no space glyph; under the archival claim a colour story, no facsimile, and no CMYK colour without a CMYK output profile; every image and raster key a page item names; the marked content of each page (no end without a start, none left open); the links (`order` running 0, 1, 2 … over the document, a destination or a URI on each); the structure tree (an element index anywhere in range, one parent each, no cycle, a content child that is a content start naming its element back, every content start some element's child, a link child owned by the link's element, the attribute keys the schema names, a namespace that is the PDF 1.7 one where one is named, every `refs` index in range and none empty). What it leaves to the writer is what only writing finds. A number in a sentence is written as JavaScript's `String` writes it, so a sentence is the oracle's to the character.
+//! What it holds: the version (read first, by [`crate::list::parse`]); every blob key a resource names; each image's samples in a shape the schema names, as many bytes as it says (version 6; `DeviceCMYK` at four components and with neither palette nor profile, version 7); the font instances (unique keys, sorted widths, a width for every glyph a text item shows and every space glyph it names); under a PDF/UA-2 claim, no word gap of a face with no space glyph; under the archival claim a colour story, no facsimile, and no CMYK colour without a CMYK output profile; every image and raster key a page item names; a fill's alpha, from 0 up to but not including 1 where there is one (version 8); the marked content of each page (no end without a start, none left open); the links (`order` running 0, 1, 2 … over the document, a destination or a URI on each); the structure tree (an element index anywhere in range, one parent each, no cycle, a content child that is a content start naming its element back, every content start some element's child, a link child owned by the link's element, the attribute keys the schema names, a namespace that is the PDF 1.7 one where one is named, every `refs` index in range and none empty). What it leaves to the writer is what only writing finds. A number in a sentence is written as JavaScript's `String` writes it, so a sentence is the oracle's to the character.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::Refusal;
 use crate::content::js_string;
-use crate::list::{BlackTextPolicy, Blobs, Conformance, DisplayList, Fill, Item, LinkItem, Num, Paint, ShadingSpace, StructChild, StructElement, TagStart, VectorItem, json_string};
+use crate::list::{BlackTextPolicy, Blobs, Conformance, DisplayList, Fill, Item, LinkItem, Num, Paint, RectItem, ShadingSpace, StructChild, StructElement, TagStart, TextItem, VectorItem, json_string};
 
 /// The keys an attribute object of `/A` may carry, which the writer writes in this order.
 pub const ATTRIBUTE_KEYS: [&str; 9] = ["O", "ListNumbering", "BBox", "Scope", "Headers", "RowSpan", "ColSpan", "TextPosition", "NoteType"];
@@ -254,6 +254,9 @@ fn check_items(list: &DisplayList) -> Result<(), Refusal> {
                 }
                 Item::RasterFallback(raster) if !holds(&r.rasters, raster.source) => {
                     return Err(Refusal::at(format!("caster: the raster at {place} names rasters {}, which the resources do not hold", js_string(raster.source.0)), p, at));
+                }
+                Item::Text(TextItem { fill: Fill { alpha: Some(a), .. }, .. }) | Item::Rect(RectItem { fill: Fill { alpha: Some(a), .. }, .. }) if !(a.0 >= 0.0 && a.0 < 1.0) => {
+                    return Err(Refusal::at(format!("caster: the fill at {place} has alpha {}; an alpha is a number from 0 up to but not including 1, and absent where the paint is opaque", js_string(a.0)), p, at));
                 }
                 Item::TagEnd(_) => {
                     if open.is_none() {

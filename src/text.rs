@@ -3,6 +3,7 @@
 //! - **The skeleton** is the list's tags: a content start is `/<Tag> <</MCID n>> BDC`, its MCIDs numbered 0, 1, 2 … in item order on each page; an artifact start is `/Artifact <</Type /T /Subtype /S>> BDC`; an end is `EMC`, closing the line open inside it first.
 //! - **A line is one text object**: `BT … ET` per `lineIndex`, wrapped in `q`, the line's `cm` and its clips, and `Q`, when it has either; every item that paints anything but text closes the open line, the next run opening a new one, and a page end closes it too.
 //! - **A vector item** is [`crate::vectors`]'s, painted as an artifact when it sits in an artifact's marked content, its names recorded into the page's scope.
+//! - **A run's alpha** (*transparent text is invisible text*, Caster's DESIGN.md S110): at 0 the run is written in text render mode 3, `3 Tr` before its `Tf` and `0 Tr` after its last `TJ`, its glyphs, ToUnicode, marked content and structure a visible run's; between 0 and 1 it is set under the shared `/ExtGState` for that `/ca` and put back under the one for `/ca 1`, after the overprint state is set and before it is put back. A rectangle's alpha is set after its overprint state, inside the `q … Q` that puts it back.
 //! - **A run is `Tf`, `rg`, `Tc`, `Tm` and one `TJ`**: each segment's glyphs as one hex string of CIDs, a space glyph where DOM whitespace separated two segments, and between them the number that moves the pen to where the browser put the next. The pen is tracked in the renderer's terms, the `/W` entry plus `Tc` per glyph, and every glyph whose shaped advance differs from its `/W` entry by more than [`KERN_EPSILON`] thousandths carries the difference as its own adjustment.
 //! - **An image** is `imageOperators`: `q`, its clip at the list's numbers with `W n`, the `cm` that puts the unit square on the painted rectangle, `/Im<n> Do`, `Q`; the page names each XObject it paints, and the use is recorded. A facsimile's form is drawn in its own units, so its `cm` is scaled down to the unit square first (`formSize`).
 //! - **`/ActualText`**: an occurrence of a glyph that stands for other text than the ToUnicode map gives it is wrapped in `/Span <</ActualText <FEFF…> >> BDC … EMC`, the array closed before it and opened after.
@@ -111,7 +112,9 @@ pub fn pages(list: &DisplayList, fonts: &[Embedded], images: &Images, mut colour
                     let font = list.resources.fonts.iter().position(|f| f.key == text.font).ok_or_else(|| Refusal::at(format!("caster: a text item names the font {}, and the display list holds no instance under that key", text.font), p, at))?;
                     let upem = list.resources.fonts[font].upem.map_or(f64::NAN, |u| u.0);
                     let ops = colour.as_deref_mut().map(|k| k.run(text, p, at)).transpose()?;
-                    let adjustments = run(&mut c, text, &fonts[font], &format!("F{font}"), upem, ops.as_ref(), &mut counts);
+                    // The set state first and then the reset, as the oracle asks for them.
+                    let alpha = text.fill.alpha.map(|a| a.0).filter(|&a| a > 0.0).map(|a| (vectors.alpha_state(a, &mut scope), vectors.alpha_state(1.0, &mut scope)));
+                    let adjustments = run(&mut c, text, &fonts[font], &format!("F{font}"), upem, ops.as_ref(), alpha.as_ref(), &mut counts);
                     counts.pens.push(Pen { page: p, item: at, adjustments });
                 }
                 Item::Raster(_) => return Err(Refusal::at(format!("forme: item {at} of page {} is a colour-cluster raster, which forme does not write; the colour-cluster road is dormant in print()", p + 1), p, at)),
@@ -143,7 +146,8 @@ pub fn pages(list: &DisplayList, fonts: &[Embedded], images: &Images, mut colour
                         Some(k) => k.rect(rect)?,
                         None => None,
                     };
-                    rect_operators(&mut c, rect, ops.as_ref());
+                    let alpha = rect.fill.alpha.map(|a| vectors.alpha_state(a.0, &mut scope));
+                    rect_operators(&mut c, rect, ops.as_ref(), alpha.as_deref());
                 }
                 Item::Marks(marks) => match colour.as_deref_mut() {
                     Some(k) => k.marks(&mut c, marks)?,
@@ -193,14 +197,17 @@ fn image_operators(c: &mut Content, image: &ImageItem, name: &str, form_size: Op
     c.op(&[], "Q");
 }
 
-/// `rectOperators`: `q`, the overprint state, the paint (`rg` at thousandths for the ground or with no colour story), `re f`, the reset, `Q`.
-fn rect_operators(c: &mut Content, rect: &RectItem, ops: Option<&PaintOps>) {
+/// `rectOperators`: `q`, the overprint state, the alpha state, the paint (`rg` at thousandths for the ground or with no colour story), `re f`, the reset, `Q`.
+fn rect_operators(c: &mut Content, rect: &RectItem, ops: Option<&PaintOps>, alpha: Option<&str>) {
     c.op(&[], "q");
+    if let Some(ops) = ops {
+        ops.write_setup(c);
+    }
+    if let Some(name) = alpha {
+        c.op(&[Operand::Name(name)], "gs");
+    }
     match ops {
-        Some(ops) => {
-            ops.write_setup(c);
-            ops.write_paint(c);
-        }
+        Some(ops) => ops.write_paint(c),
         None => {
             c.op(&rect.fill.rgb.map(|v| Operand::Num(round3(v.0))), "rg");
         }
@@ -243,7 +250,8 @@ enum Shown {
 }
 
 /// `emitRun`: one run's state operators and its `TJ`, appended to the page; the pen adjustment written before each segment, the writer's record of the item.
-fn run(c: &mut Content, item: &TextItem, font: &Embedded, name: &str, upem: f64, colour: Option<&PaintOps>, counts: &mut Counts) -> Vec<Option<Num>> {
+#[allow(clippy::too_many_arguments)]
+fn run(c: &mut Content, item: &TextItem, font: &Embedded, name: &str, upem: f64, colour: Option<&PaintOps>, alpha: Option<&(String, String)>, counts: &mut Counts) -> Vec<Option<Num>> {
     let size = item.size.0;
     let tc = item.letter_spacing.0;
     let space = item.space.0 as u16;
@@ -254,8 +262,15 @@ fn run(c: &mut Content, item: &TextItem, font: &Embedded, name: &str, upem: f64,
     let leading = item.leading_space && gap;
     let space_adv = (width(space) / 1000.0) * size;
     let start = round3(item.segments.x[0].0 - if leading { space_adv + tc } else { 0.0 });
+    let invisible = item.fill.alpha.is_some_and(|a| a.0 == 0.0);
     if let Some(ops) = colour {
         ops.write_setup(c);
+    }
+    if let Some((set, _)) = alpha {
+        c.op(&[Operand::Name(set)], "gs");
+    }
+    if invisible {
+        c.op(&[Operand::Num(3.0)], "Tr");
     }
     c.op(&[Operand::Name(name), Operand::Num(round3(size))], "Tf");
     match colour {
@@ -340,6 +355,12 @@ fn run(c: &mut Content, item: &TextItem, font: &Embedded, name: &str, upem: f64,
         adjustments.push(emitted);
     }
     flush(c, &mut shown);
+    if invisible {
+        c.op(&[Operand::Num(0.0)], "Tr");
+    }
+    if let Some((_, reset)) = alpha {
+        c.op(&[Operand::Name(reset)], "gs");
+    }
     if let Some(ops) = colour {
         ops.write_reset(c);
     }
