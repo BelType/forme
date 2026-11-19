@@ -786,3 +786,45 @@ fn a_run_at_alpha_0_is_invisible_text_and_one_below_1_is_painted_under_ca() {
     let first = bad.pages[0].items.iter().position(|i| matches!(i, Item::Text(_))).unwrap();
     assert_eq!(validate(&bad, &blobs), Err(Refusal { message: format!("caster: the fill at item {first} of page 1 has alpha 1; an alpha is a number from 0 up to but not including 1, and absent where the paint is opaque"), list_item: Some([0.0, first as f64]) }));
 }
+
+/// *The PDF 1.7 family joins the list* and *a PDF 1.7 file reads the tag table backwards* (Caster's DESIGN.md S111): a 1.7 list writes the `%PDF-1.7` header and no catalog `/Version`, no namespace and no `/Ref`, its role map as the root's `/RoleMap`, every destination on a page, the PDF/UA-1 identification with no Well-Tagged PDF declaration, and under a PDF/A-2 claim its identification and level, the extension schema of `pdfuaid`, the dates beside the information dictionary it keeps and both output intents; a claim on the other version, a namespace in a 1.7 list and a role map in a 2.0 one are refused in the oracle's sentences.
+#[test]
+fn a_pdf_1_7_list_writes_a_pdf_1_7_file_and_its_refusals_are_the_oracles() {
+    let older = |v: &mut Value| {
+        v["info"]["pdf"] = serde_json::json!("1.7");
+        v["info"]["conformance"] = serde_json::json!("pdfua1");
+        v["info"]["archival"] = serde_json::json!("pdfa2a");
+        v["structure"]["roleMap"] = serde_json::json!([{ "type": "Em", "mapped": "Span" }, { "type": "Strong", "mapped": "Span" }]);
+    };
+    let (list, blobs) = edited("roads", older);
+    let text = String::from_utf8_lossy(&write(&list, &blobs).unwrap().bytes).into_owned();
+    assert!(text.starts_with("%PDF-1.7") && !text.contains("/Version"), "the 1.7 header and no catalog /Version");
+    assert!(!text.contains("/Namespace") && !text.contains("/NS ") && !text.contains("/Ref ["), "no namespace and no /Ref");
+    let role_map = text.split("/RoleMap <<").nth(1).and_then(|rest| rest.split(">>").next()).expect("a /RoleMap");
+    assert!(role_map.contains("/Em /Span") && role_map.contains("/Strong /Span"), "the role map: {role_map}");
+    assert!(text.contains("<pdfuaid:part>1</pdfuaid:part>") && !text.contains("pdfuaid:rev") && !text.contains("wtpdf") && !text.contains("pdfd:"), "PDF/UA-1, and no Well-Tagged PDF declaration");
+    assert!(text.contains("<pdfaid:part>2</pdfaid:part>\n      <pdfaid:conformance>A</pdfaid:conformance>") && text.contains("<pdfaSchema:prefix>pdfuaid</pdfaSchema:prefix>"), "PDF/A-2a, and the extension schema of pdfuaid");
+    assert!(text.contains("/CreationDate") && text.rsplit("trailer").next().unwrap().contains("/Info") && text.contains("<xmp:CreateDate>2000-01-01T00:00:00Z</xmp:CreateDate>"), "the information dictionary kept, and the packet's dates beside it");
+    assert!(text.contains("/S /GTS_PDFA1") && text.contains("/S /GTS_PDFX") && !text.contains("/Interpolate true"), "both intents, nothing smoothed");
+    let pages: Vec<&str> = text.split(" 0 obj\n").zip(text.split(" 0 obj\n").skip(1)).filter(|(_, body)| body.trim_start_matches(['<', '\n', ' ']).starts_with("/Type /Page\n")).map(|(head, _)| head.rsplit('\n').next().unwrap()).collect();
+    let dests: Vec<&str> = text.split(" 0 R /XYZ").map(|before| before.rsplit('[').next().unwrap()).collect();
+    let dests = &dests[..dests.len() - 1];
+    assert!(!pages.is_empty() && !dests.is_empty() && dests.iter().all(|d| pages.contains(d)), "every destination names a page: {dests:?} of {pages:?}");
+
+    let (plain, blobs) = edited("roads", |v| {
+        v["info"]["pdf"] = serde_json::json!("1.7");
+        v["info"]["conformance"] = serde_json::json!("tagged");
+    });
+    let bare = String::from_utf8_lossy(&write(&plain, &blobs).unwrap().bytes).into_owned();
+    assert!(bare.starts_with("%PDF-1.7") && !bare.contains("pdfuaid") && !bare.contains("pdfaid") && !bare.contains("/RoleMap"), "a bare 1.7 list claims nothing and maps no role it does not carry");
+
+    let refused = |name: &str, edit: &dyn Fn(&mut Value)| {
+        let (list, blobs) = edited(name, edit);
+        validate(&list, &blobs).unwrap_err().message
+    };
+    assert_eq!(refused("roads", &|v| v["info"]["pdf"] = serde_json::json!("1.7")), "caster: the display list claims pdfua2, a claim on PDF 2.0, and its file is PDF 1.7; a claim fixes the version");
+    assert_eq!(refused("roads", &|v| v["info"]["conformance"] = serde_json::json!("pdfua1")), "caster: the display list claims pdfua1, a claim on PDF 1.7, and its file is PDF 2.0; a claim fixes the version");
+    assert_eq!(refused("roads", &|v| v["structure"]["roleMap"] = serde_json::json!([{ "type": "Em", "mapped": "Span" }])), "caster: the display list carries a role map and its file is PDF 2.0; only a PDF 1.7 file writes the custom types a role map names");
+    assert!(refused("pages", &|v| { v["info"]["pdf"] = serde_json::json!("1.7"); v["info"]["conformance"] = serde_json::json!("tagged"); }).ends_with("names a namespace in a PDF 1.7 list, and a PDF 1.7 file has neither namespaces nor the /Ref key"));
+    assert_eq!(refused("photo", &|v| { v["info"]["pdf"] = serde_json::json!("1.7"); v["info"]["conformance"] = serde_json::json!("tagged"); v["info"]["archival"] = serde_json::json!("pdfa2b"); }), "caster: the display list claims PDF/A-2 and carries no colour story, so no output intent would say what its colours mean (ISO 19005-2, 6.2.4.3)");
+}
